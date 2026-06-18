@@ -1,0 +1,145 @@
+// SGI Automotriz — Esquema de Base de Datos
+// Fuente de verdad: todas las tablas del sistema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── TABLAS ─────────────────────────────────────────
+
+model Usuario {
+  id            Int      @id @default(autoincrement())
+  nombre        String
+  usuario       String   @unique
+  passwordHash  String
+  rol           String   @default("CAJERO")
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  ventas        Venta[]
+  ordenes       OrdenTrabajo[]
+  cierres       CierreCaja[]
+  movimientos   MovimientoInventario[]
+  auditLogs     AuditLog[]
+}
+
+model Producto {
+  id             Int      @id @default(autoincrement())
+  nombre         String
+  codigoBarras   String?  @unique
+  codigoInterno  String   @unique
+  categoria      String
+  precioCompra   Float
+  precioVenta    Float
+  stock          Int      @default(0)
+  stockMinimo    Int      @default(5)
+  activo         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  detallesVenta  DetalleVenta[]
+  detallesOrden  DetalleOrden[]
+  movimientos    MovimientoInventario[]
+}
+
+model Venta {
+  id               Int         @id @default(autoincrement())
+  numeroFactura    String      @unique
+  fecha            DateTime    @default(now())
+  usuarioId        Int
+  usuario          Usuario     @relation(fields: [usuarioId], references: [id])
+  total            Float
+  metodoPago       String
+  estado           String      @default("CONFIRMADA")
+  motivoAnulacion  String?
+
+  detalles         DetalleVenta[]
+  ordenTrabajo     OrdenTrabajo?
+}
+
+model DetalleVenta {
+  id              Int       @id @default(autoincrement())
+  ventaId         Int
+  venta           Venta     @relation(fields: [ventaId], references: [id])
+  productoId      Int?
+  producto        Producto? @relation(fields: [productoId], references: [id])
+  servicio        String?
+  cantidad        Int
+  precioUnitario  Float
+  descuento       Float     @default(0)
+  subtotal        Float
+}
+
+model OrdenTrabajo {
+  id             Int      @id @default(autoincrement())
+  vehiculo       String
+  cliente        String
+  telefono       String?
+  descripcion    String?
+  usuarioId      Int
+  usuario        Usuario  @relation(fields: [usuarioId], references: [id])
+  estado         String   @default("PENDIENTE")
+  total          Float    @default(0)
+  fechaCreacion  DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ventaId        Int?     @unique
+  venta          Venta?   @relation(fields: [ventaId], references: [id])
+
+  detalles       DetalleOrden[]
+}
+
+model DetalleOrden {
+  id              Int          @id @default(autoincrement())
+  ordenId         Int
+  orden           OrdenTrabajo @relation(fields: [ordenId], references: [id])
+  productoId      Int?
+  producto        Producto?    @relation(fields: [productoId], references: [id])
+  servicio        String
+  cantidad        Int          @default(1)
+  precioUnitario  Float
+  subtotal        Float
+}
+
+model MovimientoInventario {
+  id          Int            @id @default(autoincrement())
+  productoId  Int
+  producto    Producto       @relation(fields: [productoId], references: [id])
+  usuarioId   Int
+  usuario     Usuario        @relation(fields: [usuarioId], references: [id])
+  tipo        String
+  cantidad    Int
+  motivo      String
+  fecha       DateTime       @default(now())
+}
+
+model CierreCaja {
+  id                Int      @id @default(autoincrement())
+  fecha             DateTime @default(now())
+  usuarioId         Int
+  usuario           Usuario  @relation(fields: [usuarioId], references: [id])
+  totalVentas       Float
+  efectivoEsperado  Float
+  efectivoContado   Float
+  diferencia        Float
+  observaciones     String?
+  confirmado        Boolean  @default(false)
+}
+
+model AuditLog {
+  id               Int      @id @default(autoincrement())
+  tabla            String
+  accion           String
+  registroId       Int?
+  usuarioId        Int?
+  usuario          Usuario? @relation(fields: [usuarioId], references: [id])
+  datosAnteriores  String?
+  datosNuevos      String?
+  ipAddress        String?
+  fecha            DateTime @default(now())
+}
