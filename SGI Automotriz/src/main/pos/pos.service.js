@@ -16,6 +16,16 @@ async function buscarProducto(codigo) {
 }
 
 async function confirmarVenta({ usuarioId, items, metodoPago, descuentoTotal = 0 }) {
+  if (!usuarioId) {
+    throw new Error('El ID del cajero/usuario es requerido');
+  }
+  if (!items || items.length === 0) {
+    throw new Error('El carrito de compras no puede estar vacío');
+  }
+  if (!metodoPago) {
+    throw new Error('El método de pago es requerido');
+  }
+
   // Genera número de factura único
   const numeroFactura = `FAC-${Date.now()}`;
 

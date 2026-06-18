@@ -27,6 +27,13 @@ async function resumenDia(fechaParam) {
 }
 
 async function confirmarCierre({ usuarioId, efectivoContado, observaciones }) {
+  if (!usuarioId) {
+    throw new Error('El ID de usuario es requerido');
+  }
+  if (efectivoContado === undefined || efectivoContado === null || isNaN(Number(efectivoContado)) || Number(efectivoContado) < 0) {
+    throw new Error('El monto de efectivo contado es requerido y debe ser un número válido mayor o igual a 0');
+  }
+
   const resumen = await resumenDia();
   const diferencia = efectivoContado - resumen.totalVentas;
 

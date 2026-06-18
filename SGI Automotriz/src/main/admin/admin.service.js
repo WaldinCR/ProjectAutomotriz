@@ -13,6 +13,21 @@ async function listarUsuarios() {
 }
 
 async function crearUsuario({ nombre, usuario, password, rol }) {
+  if (!nombre || nombre.trim() === '') {
+    throw new Error('El nombre del usuario es requerido');
+  }
+  if (!usuario || usuario.trim() === '') {
+    throw new Error('El nombre de usuario (username) es requerido');
+  }
+  if (!password || password.trim() === '') {
+    throw new Error('La contraseña es requerida');
+  }
+
+  const existing = await prisma.usuario.findUnique({ where: { usuario } });
+  if (existing) {
+    throw new Error('El nombre de usuario ya se encuentra registrado');
+  }
+
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   return prisma.usuario.create({
     data: {

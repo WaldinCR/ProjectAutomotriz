@@ -136,8 +136,8 @@ async function generarReporteMensual({ mes, anio }) {
   const mesInt = parseInt(mes);
   const anioInt = parseInt(anio);
 
-  const inicioMes = new Date(Date.utc(anioInt, mesInt - 1, 1, 0, 0, 0, 0));
-  const finMes = new Date(Date.utc(anioInt, mesInt, 0, 23, 59, 59, 999));
+  const inicioMes = new Date(Date.UTC(anioInt, mesInt - 1, 1, 0, 0, 0, 0));
+  const finMes = new Date(Date.UTC(anioInt, mesInt, 0, 23, 59, 59, 999));
 
   // Ventas del mes
   const ventas = await prisma.venta.findMany({

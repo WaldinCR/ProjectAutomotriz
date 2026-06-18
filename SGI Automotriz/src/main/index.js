@@ -42,7 +42,7 @@ function createWindow() {
   });
 
   // En desarrollo carga Vite, en producción carga el build
-  if (process.env.NODE_ENV === 'development') {
+  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
     win.loadURL('http://localhost:5173');
     win.webContents.openDevTools();
   } else {

@@ -4,6 +4,28 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function crearOrden({ usuarioId, vehiculo, cliente, telefono, descripcion, items }) {
+  if (!vehiculo || vehiculo.trim() === '') {
+    throw new Error('El vehículo (modelo/marca) es requerido');
+  }
+  if (!cliente || cliente.trim() === '') {
+    throw new Error('El nombre del cliente es requerido');
+  }
+  if (!items || items.length === 0) {
+    throw new Error('Debe agregar al menos un servicio o repuesto a la orden de trabajo');
+  }
+
+  for (const item of items) {
+    if (!item.servicio || item.servicio.trim() === '') {
+      throw new Error('El nombre del servicio o repuesto es requerido');
+    }
+    if (item.cantidad === undefined || item.cantidad === null || isNaN(Number(item.cantidad)) || Number(item.cantidad) <= 0) {
+      throw new Error('La cantidad de cada elemento de la orden debe ser mayor a 0');
+    }
+    if (item.precioUnitario === undefined || item.precioUnitario === null || isNaN(Number(item.precioUnitario)) || Number(item.precioUnitario) < 0) {
+      throw new Error('El precio unitario de cada elemento debe ser un número válido');
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
     // 1. Calcular total
     const total = items.reduce((sum, i) => sum + i.subtotal, 0);

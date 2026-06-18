@@ -1,60 +1,88 @@
-// Pantalla de Login
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import Alert from '../components/Alert';
 
 export default function LoginPage() {
   const [form, setForm]   = useState({ usuario: '', password: '' });
   const [error, setError] = useState('');
-  const navigate           = useNavigate();
-  const { setAuth }        = useAuthStore();
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const { setAuth } = useAuthStore();
 
   async function handleLogin() {
+    if (!form.usuario || !form.password) {
+      setError('Ingresa usuario y contraseña');
+      return;
+    }
+    setLoading(true);
+    setError('');
     try {
-      setError('');
       const res = await window.api.auth.login(form);
       setAuth(res.usuario, res.token);
       navigate('/pos');
     } catch (e) {
-      setError(e.message || 'Error al iniciar sesión');
+      setError(e.message || 'Credenciales incorrectas');
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-      <div className="bg-white rounded-2xl shadow-2xl p-10 w-full max-w-md">
-        <h1 className="text-3xl font-bold text-center text-blue-900 mb-2">SGI Automotriz</h1>
-        <p className="text-center text-gray-500 mb-8">Sistema de Gestión Integral</p>
+    <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-sm">
 
-        {error && (
-          <div className="bg-red-50 border border-red-300 text-red-700 rounded-lg p-3 mb-4 text-sm">
-            {error}
-          </div>
-        )}
-
-        <div className="space-y-4">
-          <input
-            type="text"
-            placeholder="Usuario"
-            value={form.usuario}
-            onChange={e => setForm({...form, usuario: e.target.value})}
-            className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <input
-            type="password"
-            placeholder="Contraseña"
-            value={form.password}
-            onChange={e => setForm({...form, password: e.target.value})}
-            onKeyDown={e => e.key === 'Enter' && handleLogin()}
-            className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            onClick={handleLogin}
-            className="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition"
-          >
-            Iniciar Sesión
-          </button>
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-extrabold text-white tracking-tight">SGI</h1>
+          <p className="text-slate-400 text-sm mt-1">Sistema de Gestión Automotriz</p>
         </div>
+
+        {/* Card */}
+        <div className="bg-white rounded-2xl shadow-2xl p-8 border border-slate-100">
+          <h2 className="text-lg font-semibold text-slate-800 mb-6">Iniciar sesión</h2>
+
+          {error && (
+            <Alert type="error" message={error} onClose={() => setError('')} />
+          )}
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-650 mb-1">Usuario</label>
+              <input
+                type="text"
+                className="w-full border border-slate-200 rounded-[8px] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-slate-50 text-slate-900 placeholder-slate-400 transition"
+                placeholder="Tu usuario"
+                value={form.usuario}
+                onChange={e => setForm({ ...form, usuario: e.target.value })}
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-655 mb-1">Contraseña</label>
+              <input
+                type="password"
+                className="w-full border border-slate-200 rounded-[8px] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-slate-50 text-slate-900 placeholder-slate-400 transition"
+                placeholder="••••••••"
+                value={form.password}
+                onChange={e => setForm({ ...form, password: e.target.value })}
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              />
+            </div>
+            <button
+              onClick={handleLogin}
+              disabled={loading}
+              className="w-full bg-[#1d4ed8] hover:bg-[#1e40af] text-white font-semibold py-2.5 rounded-[8px] transition-all duration-150 text-sm shadow-md mt-2"
+            >
+              {loading ? 'Verificando...' : 'Entrar'}
+            </button>
+          </div>
+        </div>
+
+        <p className="text-center text-slate-500 text-xs mt-6">
+          Proyecto Ceballos — SGI v1.0
+        </p>
       </div>
     </div>
   );
