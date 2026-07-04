@@ -9,7 +9,7 @@ const SALT_ROUNDS = 12;
 
 async function login({ usuario, password }) {
   const user = await prisma.usuario.findUnique({ where: { usuario } });
-  if (!user || !user.activo) throw new Error('Usuario no encontrado o inactivo');
+  if (!user || !user.activo) throw new Error('Usuario no Encontrado o Inactivo');
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) throw new Error('Contraseña incorrecta');
