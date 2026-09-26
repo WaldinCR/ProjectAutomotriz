@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Production build
+dist/
+**/dist/
+
+# Environment variables
+.env
+**/.env
+.env.local
+
+# Databases
+*.db
+**/*.db
+*.db-journal
+**/*.db-journal
+*.db-wal
+**/*.db-wal
+*.db-shm
+**/*.db-shm
+
+# IDE & OS
+.vs/
+**/.vs/
+.vscode/
+**/.vscode/
+.DS_Store
+Thumbs.db
