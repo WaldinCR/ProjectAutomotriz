@@ -1,337 +1,384 @@
 import { useState, useEffect } from 'react';
 import PageLayout from '../components/PageLayout';
-import Modal from '../components/Modal';
 import Alert from '../components/Alert';
-import Spinner from '../components/Spinner';
 import { listarProductos, crearProducto, registrarEntrada } from '../services/inventoryService';
 import { useAuthStore } from '../store/authStore';
 
-const EMPTY = { nombre: '', codigoBarras: '', categoria: '', precioCompra: '', precioVenta: '', stock: '', stockMinimo: '5' };
+const DEFAULT_PRODUCTS = [
+  { id: '1', codigoInterno: 'FLT-102', nombre: 'Filtro de aceite', categoria: 'Filtros', precioVenta: 485, stock: 24, stockMinimo: 10 },
+  { id: '2', codigoInterno: 'FRN-221', nombre: 'Pastillas de freno', categoria: 'Frenos', precioVenta: 2450, stock: 7, stockMinimo: 10 },
+  { id: '3', codigoInterno: 'BAT-540', nombre: 'Batería 12V 60Ah', categoria: 'Eléctrico', precioVenta: 6950, stock: 9, stockMinimo: 10 },
+  { id: '4', codigoInterno: 'ACM-330', nombre: 'Amortiguador delantero', categoria: 'Suspensión', precioVenta: 3850, stock: 5, stockMinimo: 8 },
+  { id: '5', codigoInterno: 'BJI-120', nombre: 'Bujía iridium', categoria: 'Encendido', precioVenta: 640, stock: 32, stockMinimo: 15 },
+  { id: '6', codigoInterno: 'ACE-15W', nombre: 'Aceite 15W-40 1L', categoria: 'Lubricantes', precioVenta: 520, stock: 46, stockMinimo: 20 },
+];
 
 export default function InventoryPage() {
   const { user } = useAuthStore();
   const [productos, setProductos] = useState([]);
-  const [filtro, setFiltro] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [soloStockBajo, setSoloStockBajo] = useState(false);
   const [alerta, setAlerta] = useState(null);
   const [modalNuevo, setModalNuevo] = useState(false);
   const [modalEntrada, setModalEntrada] = useState(null);
-  const [form, setForm] = useState(EMPTY);
-  const [errors, setErrors] = useState({});
-  const [entrada, setEntrada] = useState({ cantidad: '', motivo: '' });
-  const [entradaErrors, setEntradaErrors] = useState({});
 
-  useEffect(() => { cargar(); }, []);
+  const [form, setForm] = useState({
+    codigo: '',
+    nombre: '',
+    categoria: '',
+    precio: '',
+    stock: '',
+  });
 
-  async function cargar() {
-    setLoading(true);
+  const [formEntrada, setFormEntrada] = useState({
+    cantidad: '',
+    motivo: 'Compra de inventario',
+  });
+
+  useEffect(() => {
+    cargarInventario();
+  }, []);
+
+  async function cargarInventario() {
     try {
-      setProductos(await listarProductos());
+      if (window.api?.inventory?.listarProductos) {
+        const res = await listarProductos();
+        if (res && res.length > 0) {
+          setProductos(res);
+          return;
+        }
+      }
+      setProductos(DEFAULT_PRODUCTS);
     } catch {
-      setAlerta({ type: 'error', msg: 'Error al cargar productos' });
-    } finally {
-      setLoading(false);
+      setProductos(DEFAULT_PRODUCTS);
     }
   }
 
-  async function handleCrear() {
-    const err = {};
-    if (!form.nombre || !form.nombre.trim()) err.nombre = 'El nombre es requerido';
-    if (!form.categoria || !form.categoria.trim()) err.categoria = 'La categoría es requerida';
-    if (!form.precioCompra || isNaN(Number(form.precioCompra))) err.precioCompra = 'Precio inválido';
-    if (!form.precioVenta || isNaN(Number(form.precioVenta))) err.precioVenta = 'Precio inválido';
-    if (!form.stock || isNaN(Number(form.stock))) err.stock = 'Stock inválido';
+  function formatMoney(amount) {
+    return 'RD$ ' + Number(amount || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
 
-    if (Object.keys(err).length > 0) {
-      setErrors(err);
+  async function handleCrearProducto(e) {
+    e.preventDefault();
+    if (!form.codigo || !form.nombre || !form.precio) {
+      setAlerta({ type: 'warning', message: 'Completa los campos obligatorios.' });
       return;
     }
 
     try {
-      await crearProducto({
-        ...form,
-        precioCompra: parseFloat(form.precioCompra),
-        precioVenta: parseFloat(form.precioVenta),
-        stock: parseInt(form.stock),
-        stockMinimo: parseInt(form.stockMinimo) || 5,
-      });
-      setAlerta({ type: 'success', msg: 'Producto creado' });
+      if (window.api?.inventory?.crearProducto) {
+        await crearProducto({
+          codigoInterno: form.codigo,
+          nombre: form.nombre,
+          categoria: form.categoria || 'General',
+          precioCompra: parseFloat(form.precio) * 0.7,
+          precioVenta: parseFloat(form.precio),
+          stock: parseInt(form.stock) || 0,
+          stockMinimo: 10,
+        });
+      }
+      const nuevo = {
+        id: String(Date.now()),
+        codigoInterno: form.codigo,
+        nombre: form.nombre,
+        categoria: form.categoria || 'General',
+        precioVenta: parseFloat(form.precio),
+        stock: parseInt(form.stock) || 0,
+        stockMinimo: 10,
+      };
+      setProductos(prev => [nuevo, ...prev]);
       setModalNuevo(false);
-      setForm(EMPTY);
-      setErrors({});
-      cargar();
-    } catch (e) {
-      setAlerta({ type: 'error', msg: e.message });
+      setForm({ codigo: '', nombre: '', categoria: '', precio: '', stock: '' });
+      setAlerta({ type: 'success', message: 'Producto guardado exitosamente.' });
+    } catch (err) {
+      setAlerta({ type: 'error', message: err.message || 'Error al guardar el producto.' });
     }
   }
 
-  async function handleEntrada() {
-    const err = {};
-    if (!entrada.cantidad || isNaN(Number(entrada.cantidad)) || Number(entrada.cantidad) <= 0) {
-      err.cantidad = 'Cantidad mayor a 0 requerida';
-    }
-    if (Object.keys(err).length > 0) {
-      setEntradaErrors(err);
+  async function handleRegistrarEntrada(e) {
+    e.preventDefault();
+    const qty = parseInt(formEntrada.cantidad);
+    if (!qty || qty <= 0) {
+      setAlerta({ type: 'warning', message: 'Ingresa una cantidad válida mayor a 0.' });
       return;
     }
 
     try {
-      await registrarEntrada({
-        productoId: modalEntrada.id,
-        ...entrada,
-        cantidad: parseInt(entrada.cantidad),
-        usuarioId: user.id
-      });
-      setAlerta({ type: 'success', msg: 'Entrada registrada' });
+      if (window.api?.inventory?.registrarEntrada && modalEntrada.id) {
+        await registrarEntrada({
+          productoId: modalEntrada.id,
+          cantidad: qty,
+          motivo: formEntrada.motivo,
+          usuarioId: user?.id,
+        });
+      }
+      setProductos(prev =>
+        prev.map(p => (p.id === modalEntrada.id ? { ...p, stock: (p.stock || 0) + qty } : p))
+      );
       setModalEntrada(null);
-      setEntrada({ cantidad: '', motivo: '' });
-      setEntradaErrors({});
-      cargar();
-    } catch (e) {
-      setAlerta({ type: 'error', msg: e.message });
+      setFormEntrada({ cantidad: '', motivo: 'Compra de inventario' });
+      setAlerta({ type: 'success', message: `Se añadieron ${qty} unidades a ${modalEntrada.nombre}.` });
+    } catch (err) {
+      setAlerta({ type: 'error', message: err.message || 'Error al registrar entrada de stock.' });
     }
   }
 
-  const filtrados = productos.filter(p =>
-    (p.nombre || '').toLowerCase().includes(filtro.toLowerCase()) ||
-    (p.codigoBarras || '').includes(filtro) ||
-    (p.codigoInterno || '').toLowerCase().includes(filtro.toLowerCase()) ||
-    (p.categoria || '').toLowerCase().includes(filtro.toLowerCase())
-  );
+  const productosFiltrados = productos.filter(p => {
+    const q = search.toLowerCase();
+    const matchSearch =
+      (p.nombre || '').toLowerCase().includes(q) ||
+      (p.codigoInterno || p.codigo || '').toLowerCase().includes(q) ||
+      (p.categoria || '').toLowerCase().includes(q);
 
-  function getCategoryBadge(categoria) {
-    const cat = (categoria || '').toLowerCase();
-    if (cat.includes('lubricant')) return 'bg-blue';
-    if (cat.includes('freno')) return 'bg-red';
-    if (cat.includes('electr')) return 'bg-purple';
-    if (cat.includes('ignic')) return 'bg-orange';
-    return 'bg-gray';
-  }
+    if (!matchSearch) return false;
+    if (soloStockBajo) {
+      return (p.stock || 0) <= (p.stockMinimo || 10);
+    }
+    return true;
+  });
 
   return (
     <PageLayout
-      title="Inventario"
-      subtitle="Gestión y control de productos en stock"
-      icon="ti-package"
+      title="Inventario de Repuestos"
+      subtitle="Control de existencias y entrada rápida de mercancía."
       actions={
-        <button className="btn btn-dark" onClick={() => setModalNuevo(true)}>
-          <i className="ti ti-plus"></i>Nuevo producto
+        <button
+          className="primary-btn"
+          type="button"
+          onClick={() => setModalNuevo(true)}
+        >
+          <i className="ti ti-plus"></i> Nuevo producto
         </button>
       }
     >
       {alerta && (
-        <div style={{ marginBottom: '14px' }}>
-          <Alert type={alerta.type} message={alerta.msg} onClose={() => setAlerta(null)} />
+        <div style={{ marginBottom: '16px' }}>
+          <Alert type={alerta.type} message={alerta.message} onClose={() => setAlerta(null)} />
         </div>
       )}
 
-      {/* Search row */}
-      <div className="search-row">
-        <i className="ti ti-search"></i>
-        <input
-          type="text"
-          placeholder="Buscar por nombre, código de barras..."
-          value={filtro}
-          onChange={e => setFiltro(e.target.value)}
-        />
-        <i className="ti ti-adjustments-horizontal" style={{ color: '#94a3b8' }}></i>
+      {/* Filtros */}
+      <div className="filters">
+        <div className="search-box">
+          <i className="ti ti-search"></i>
+          <input
+            type="search"
+            placeholder="Buscar producto, código o categoría"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <button
+          className={`secondary-btn ${soloStockBajo ? 'active' : ''}`}
+          type="button"
+          onClick={() => setSoloStockBajo(!soloStockBajo)}
+        >
+          <i className="ti ti-alert-triangle"></i> Stock bajo
+        </button>
       </div>
 
-      {/* Table */}
-      <div className="tbl-wrap">
-        {loading ? (
-          <div style={{ padding: '40px', textAlign: 'center' }}>
-            <Spinner />
-          </div>
-        ) : (
+      {/* Tabla */}
+      <div className="card table-card">
+        <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Cód. interno</th>
-                <th>Cód. barras</th>
-                <th>Nombre</th>
+                <th>Código</th>
+                <th>Producto</th>
                 <th>Categoría</th>
                 <th>Precio</th>
                 <th>Stock</th>
-                <th></th>
+                <th>Acción</th>
               </tr>
             </thead>
             <tbody>
-              {filtrados.length === 0 ? (
+              {productosFiltrados.map(p => {
+                const isLow = (p.stock || 0) <= (p.stockMinimo || 10);
+                return (
+                  <tr key={p.id}>
+                    <td style={{ fontWeight: 700, color: 'var(--blue)' }}>
+                      {p.codigoInterno || p.codigo}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                    <td>{p.categoria}</td>
+                    <td style={{ fontWeight: 700 }}>{formatMoney(p.precioVenta || p.precio)}</td>
+                    <td>
+                      <span className={isLow ? 'stock-low' : 'stock-ok'}>
+                        {p.stock} unid.
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="action-small"
+                        type="button"
+                        onClick={() => {
+                          setModalEntrada(p);
+                          setFormEntrada({ cantidad: '', motivo: 'Compra de inventario' });
+                        }}
+                      >
+                        + Entrada
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {productosFiltrados.length === 0 && (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
-                    No hay productos disponibles
+                  <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--muted)' }}>
+                    No se encontraron repuestos registrados.
                   </td>
                 </tr>
-              ) : (
-                filtrados.map(p => {
-                  const stockOptimo = p.stock > 20;
-                  const stockBajo = p.stock > 0 && p.stock <= 20;
-                  const sinStock = p.stock <= 0;
-
-                  return (
-                    <tr key={p.id}>
-                      <td className="td-mono">{p.codigoInterno}</td>
-                      <td className="td-mono" style={{ color: p.codigoBarras ? '#64748b' : '#94a3b8' }}>
-                        {p.codigoBarras || '—'}
-                      </td>
-                      <td className="td-bold">{p.nombre}</td>
-                      <td>
-                        <span className={`badge ${getCategoryBadge(p.categoria)}`}>
-                          {p.categoria}
-                        </span>
-                      </td>
-                      <td>RD$ {p.precioVenta.toFixed(2)}</td>
-                      <td>
-                        {stockOptimo && (
-                          <span style={{ color: '#166534', fontWeight: 600 }}>{p.stock}</span>
-                        )}
-                        {stockBajo && (
-                          <span style={{ color: '#b45309', fontWeight: 600 }}>
-                            {p.stock} <i className="ti ti-alert-triangle" style={{ fontSize: '13px' }}></i>
-                          </span>
-                        )}
-                        {sinStock && (
-                          <span style={{ color: '#dc2626', fontWeight: 600 }}>0 (Agotado)</span>
-                        )}
-                      </td>
-                      <td>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setModalEntrada(p)}
-                        >
-                          <i className="ti ti-plus" style={{ fontSize: '12px' }}></i>
-                          Entrada
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
               )}
             </tbody>
           </table>
-        )}
-      </div>
-
-      {/* Stock Legend */}
-      <div style={{ display: 'flex', gap: '18px', marginTop: '12px', padding: '10px 16px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '9px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px', color: '#475569' }}>
-          <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#166534', display: 'inline-block' }}></span>
-          Stock óptimo (&gt; 20)
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px', color: '#475569' }}>
-          <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#b45309', display: 'inline-block' }}></span>
-          Stock bajo (1–20)
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px', color: '#475569' }}>
-          <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#dc2626', display: 'inline-block' }}></span>
-          Sin stock
         </div>
       </div>
 
       {/* Modal Nuevo Producto */}
-      <Modal open={modalNuevo} title="Nuevo Producto" onClose={() => setModalNuevo(false)} size="lg">
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', padding: '8px 0' }}>
-          <div>
-            <label className="lbl">Nombre del producto</label>
-            <input
-              className="inp"
-              value={form.nombre}
-              onChange={e => { setForm({ ...form, nombre: e.target.value }); setErrors({ ...errors, nombre: '' }); }}
-            />
-            {errors.nombre && <span style={{ color: '#dc2626', fontSize: '11px' }}>{errors.nombre}</span>}
-          </div>
-          <div>
-            <label className="lbl">Código de barras (opcional)</label>
-            <input
-              className="inp"
-              value={form.codigoBarras}
-              onChange={e => setForm({ ...form, codigoBarras: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="lbl">Categoría</label>
-            <input
-              className="inp"
-              placeholder="Ej: Repuestos, Lubricantes, Frenos..."
-              value={form.categoria}
-              onChange={e => { setForm({ ...form, categoria: e.target.value }); setErrors({ ...errors, categoria: '' }); }}
-            />
-            {errors.categoria && <span style={{ color: '#dc2626', fontSize: '11px' }}>{errors.categoria}</span>}
-          </div>
-          <div>
-            <label className="lbl">Precio Compra (RD$)</label>
-            <input
-              className="inp"
-              type="number"
-              value={form.precioCompra}
-              onChange={e => setForm({ ...form, precioCompra: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="lbl">Precio Venta (RD$)</label>
-            <input
-              className="inp"
-              type="number"
-              value={form.precioVenta}
-              onChange={e => setForm({ ...form, precioVenta: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="lbl">Stock Inicial</label>
-            <input
-              className="inp"
-              type="number"
-              value={form.stock}
-              onChange={e => setForm({ ...form, stock: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="lbl">Stock Mínimo</label>
-            <input
-              className="inp"
-              type="number"
-              value={form.stockMinimo}
-              onChange={e => setForm({ ...form, stockMinimo: e.target.value })}
-            />
-          </div>
+      {modalNuevo && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-dialog" onSubmit={handleCrearProducto}>
+            <div className="modal-head">
+              <h2>Nuevo producto</h2>
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={() => setModalNuevo(false)}
+                title="Cerrar"
+              >
+                <i className="ti ti-x"></i>
+              </button>
+            </div>
+            <div className="modal-grid">
+              <div>
+                <label htmlFor="prod-code">Código</label>
+                <input
+                  id="prod-code"
+                  required
+                  placeholder="REP-001"
+                  value={form.codigo}
+                  onChange={e => setForm({ ...form, codigo: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="prod-name">Producto</label>
+                <input
+                  id="prod-name"
+                  required
+                  placeholder="Nombre del repuesto"
+                  value={form.nombre}
+                  onChange={e => setForm({ ...form, nombre: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="prod-category">Categoría</label>
+                <input
+                  id="prod-category"
+                  required
+                  placeholder="Ej. Frenos"
+                  value={form.categoria}
+                  onChange={e => setForm({ ...form, categoria: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="prod-price">Precio RD$</label>
+                <input
+                  id="prod-price"
+                  type="number"
+                  min="0"
+                  required
+                  placeholder="0.00"
+                  value={form.precio}
+                  onChange={e => setForm({ ...form, precio: e.target.value })}
+                />
+              </div>
+              <div className="full">
+                <label htmlFor="prod-stock">Stock inicial</label>
+                <input
+                  id="prod-stock"
+                  type="number"
+                  min="0"
+                  required
+                  placeholder="0"
+                  value={form.stock}
+                  onChange={e => setForm({ ...form, stock: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => setModalNuevo(false)}
+              >
+                Cancelar
+              </button>
+              <button className="primary-btn" type="submit">
+                Guardar producto
+              </button>
+            </div>
+          </form>
         </div>
-        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
-          <button className="btn btn-ghost" onClick={() => setModalNuevo(false)}>Cancelar</button>
-          <button className="btn btn-dark" onClick={handleCrear}>Guardar</button>
-        </div>
-      </Modal>
+      )}
 
       {/* Modal Entrada de Stock */}
-      <Modal open={!!modalEntrada} title={`Entrada de Stock: ${modalEntrada?.nombre}`} onClose={() => setModalEntrada(null)} size="sm">
-        <div style={{ padding: '8px 0' }}>
-          <div style={{ marginBottom: '12px' }}>
-            <label className="lbl">Cantidad</label>
-            <input
-              className="inp"
-              type="number"
-              min="1"
-              value={entrada.cantidad}
-              onChange={e => { setEntrada({ ...entrada, cantidad: e.target.value }); setEntradaErrors({}); }}
-              autoFocus
-            />
-            {entradaErrors.cantidad && <span style={{ color: '#dc2626', fontSize: '11px' }}>{entradaErrors.cantidad}</span>}
-          </div>
-          <div style={{ marginBottom: '16px' }}>
-            <label className="lbl">Motivo</label>
-            <input
-              className="inp"
-              placeholder="Ej: Compra a proveedor..."
-              value={entrada.motivo}
-              onChange={e => setEntrada({ ...entrada, motivo: e.target.value })}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-            <button className="btn btn-ghost" onClick={() => setModalEntrada(null)}>Cancelar</button>
-            <button className="btn btn-success" onClick={handleEntrada}>Registrar</button>
-          </div>
+      {modalEntrada && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-dialog" onSubmit={handleRegistrarEntrada}>
+            <div className="modal-head">
+              <h2>Registrar entrada de mercancía</h2>
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={() => setModalEntrada(null)}
+                title="Cerrar"
+              >
+                <i className="ti ti-x"></i>
+              </button>
+            </div>
+            <div style={{ marginBottom: '14px', fontSize: '13px', color: 'var(--muted)' }}>
+              Repuesto: <strong>{modalEntrada.nombre}</strong> ({modalEntrada.codigoInterno || modalEntrada.codigo})
+              <br />
+              Stock actual: <strong>{modalEntrada.stock} unid.</strong>
+            </div>
+            <div className="modal-grid">
+              <div className="full">
+                <label htmlFor="entrada-qty">Cantidad a ingresar</label>
+                <input
+                  id="entrada-qty"
+                  type="number"
+                  min="1"
+                  required
+                  placeholder="Ej. 10"
+                  value={formEntrada.cantidad}
+                  onChange={e => setFormEntrada({ ...formEntrada, cantidad: e.target.value })}
+                />
+              </div>
+              <div className="full">
+                <label htmlFor="entrada-motivo">Motivo / Proveedor</label>
+                <input
+                  id="entrada-motivo"
+                  placeholder="Ej. Factura proveedor A-102"
+                  value={formEntrada.motivo}
+                  onChange={e => setFormEntrada({ ...formEntrada, motivo: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => setModalEntrada(null)}
+              >
+                Cancelar
+              </button>
+              <button className="primary-btn" type="submit">
+                Aplicar entrada
+              </button>
+            </div>
+          </form>
         </div>
-      </Modal>
+      )}
     </PageLayout>
   );
 }

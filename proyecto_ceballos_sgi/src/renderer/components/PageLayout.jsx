@@ -1,28 +1,58 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import { useAuthStore } from '../store/authStore';
 
-export default function PageLayout({ children, title, subtitle, icon = 'ti-settings', actions }) {
+export default function PageLayout({ children, title, subtitle, actions }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const navigate = useNavigate();
+  const { logout } = useAuthStore();
+
+  function handleLogout() {
+    if (window.api && window.api.auth) {
+      window.api.auth.logout();
+    }
+    logout();
+    navigate('/login');
+  }
+
   return (
-    <div className="app">
-      <Sidebar />
-      <div className="main">
-        <div className="content">
-          {(title || actions) && (
-            <div className="page-head">
-              <div className="page-icon-group">
-                <div className="page-icon">
-                  <i className={`ti ${icon}`}></i>
-                </div>
+    <div className="app-screen">
+      <Sidebar collapsed={collapsed} />
+      <div className="app-main">
+        <header className="topbar">
+          <div className="topbar-left">
+            <button
+              id="collapse-sidebar"
+              className="icon-btn"
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              title={collapsed ? "Expandir menú" : "Colapsar menú"}
+            >
+              <i className={`ti ${collapsed ? 'ti-layout-sidebar-left-expand' : 'ti-layout-sidebar-left-collapse'}`}></i>
+            </button>
+            <h1 id="page-heading">{title || 'Repuestos Ceballos'}</h1>
+          </div>
+          <button className="logout-btn" onClick={handleLogout} type="button">
+            <i className="ti ti-logout"></i>
+            <span>Cerrar sesión</span>
+          </button>
+        </header>
+
+        <main className="view-area">
+          <div className="view active">
+            {(title || actions || subtitle) && (
+              <div className="view-heading">
                 <div>
-                  <div className="page-title">{title}</div>
-                  {subtitle && <div className="page-sub">{subtitle}</div>}
-                  <div className="orange-bar"></div>
+                  <h2>{title}</h2>
+                  {subtitle && <p>{subtitle}</p>}
                 </div>
+                {actions && <div className="toolbar">{actions}</div>}
               </div>
-              {actions && <div className="page-actions">{actions}</div>}
-            </div>
-          )}
-          {children}
-        </div>
+            )}
+            {children}
+          </div>
+        </main>
       </div>
     </div>
   );

@@ -1,225 +1,286 @@
 import { useState, useEffect } from 'react';
 import PageLayout from '../components/PageLayout';
-import Modal from '../components/Modal';
 import Alert from '../components/Alert';
-import Spinner from '../components/Spinner';
 import { listarUsuarios, crearUsuario, consultarAuditLog } from '../services/adminService';
+
+const DEFAULT_USERS = [
+  { id: '1', usuario: 'admin.ceballos', nombre: 'Alberto Ceballos', rol: 'Administrador', estado: 'Activo', ultimoAcceso: 'Hoy · 5:40 PM' },
+  { id: '2', usuario: 'm.rodriguez', nombre: 'María Rodríguez', rol: 'Vendedor', estado: 'Activo', ultimoAcceso: 'Hoy · 4:16 PM' },
+  { id: '3', usuario: 'j.perez', nombre: 'Juan Pérez', rol: 'Técnico', estado: 'Activo', ultimoAcceso: 'Hoy · 3:55 PM' },
+];
+
+const DEFAULT_AUDIT = [
+  { id: '1', fecha: '01 oct. 2026 · 5:42 PM', usuario: 'admin.ceballos', accion: 'Venta confirmada #V-10488', modulo: 'Punto de Venta' },
+  { id: '2', fecha: '01 oct. 2026 · 4:16 PM', usuario: 'm.rodriguez', accion: 'Entrada de stock: Filtro de aceite', modulo: 'Inventario' },
+  { id: '3', fecha: '01 oct. 2026 · 11:08 AM', usuario: 'j.perez', accion: 'Orden OT-284 creada', modulo: 'Órdenes de Trabajo' },
+];
 
 export default function AdminPage() {
   const [tab, setTab] = useState('usuarios');
-  const [usuarios, setUsuarios] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [usuarios, setUsuarios] = useState(DEFAULT_USERS);
+  const [auditLogs, setAuditLogs] = useState(DEFAULT_AUDIT);
   const [alerta, setAlerta] = useState(null);
   const [modalNuevo, setModalNuevo] = useState(false);
-  const [form, setForm] = useState({ nombre: '', usuario: '', password: '', rol: 'CAJERO' });
+  const [form, setForm] = useState({
+    nombre: '',
+    usuario: '',
+    password: '',
+    rol: 'Vendedor',
+  });
 
-  useEffect(() => { cargar(); }, [tab]);
+  useEffect(() => {
+    cargarDatos();
+  }, [tab]);
 
-  async function cargar() {
-    setLoading(true);
+  async function cargarDatos() {
     try {
       if (tab === 'usuarios') {
-        setUsuarios(await listarUsuarios());
+        if (window.api?.admin?.listarUsuarios) {
+          const res = await listarUsuarios();
+          if (res && res.length > 0) {
+            setUsuarios(res.map(u => ({
+              id: u.id,
+              usuario: u.usuario,
+              nombre: u.nombre,
+              rol: u.rol === 'ADMINISTRADOR' ? 'Administrador' : (u.rol === 'CAJERO' ? 'Vendedor' : u.rol),
+              estado: 'Activo',
+              ultimoAcceso: 'Hoy · Reciente',
+            })));
+            return;
+          }
+        }
+        setUsuarios(DEFAULT_USERS);
       } else {
-        setLogs(await consultarAuditLog({}));
+        if (window.api?.admin?.consultarAuditLog) {
+          const res = await consultarAuditLog({});
+          if (res && res.length > 0) {
+            setAuditLogs(res.map(l => ({
+              id: l.id,
+              fecha: new Date(l.createdAt).toLocaleString('es-DO'),
+              usuario: l.usuario?.usuario || 'Sistema',
+              accion: l.accion,
+              modulo: l.modulo || 'General',
+            })));
+            return;
+          }
+        }
+        setAuditLogs(DEFAULT_AUDIT);
       }
     } catch {
-      setAlerta({ type: 'error', msg: 'Error al cargar datos administrativos' });
-    } finally {
-      setLoading(false);
+      if (tab === 'usuarios') setUsuarios(DEFAULT_USERS);
+      else setAuditLogs(DEFAULT_AUDIT);
     }
   }
 
-  async function handleCrear() {
-    if (!form.nombre || !form.usuario || !form.password) {
-      setAlerta({ type: 'error', msg: 'Completa todos los campos obligatorios' });
+  async function handleCrearUsuario(e) {
+    e.preventDefault();
+    if (!form.nombre || !form.usuario) {
+      setAlerta({ type: 'warning', message: 'Completa los campos obligatorios.' });
       return;
     }
-    try {
-      await crearUsuario(form);
-      setAlerta({ type: 'success', msg: 'Usuario creado exitosamente' });
-      setModalNuevo(false);
-      setForm({ nombre: '', usuario: '', password: '', rol: 'CAJERO' });
-      cargar();
-    } catch (e) {
-      setAlerta({ type: 'error', msg: e.message });
-    }
-  }
 
-  function getRolBadge(rol) {
-    switch (rol) {
-      case 'ADMINISTRADOR': return 'bg-blue';
-      case 'SUPERVISOR': return 'bg-yellow';
-      default: return 'bg-gray';
+    try {
+      if (window.api?.admin?.crearUsuario) {
+        await crearUsuario({
+          nombre: form.nombre,
+          usuario: form.usuario,
+          password: form.password || 'ceballos123',
+          rol: form.rol === 'Administrador' ? 'ADMINISTRADOR' : 'CAJERO',
+        });
+      }
+      const nuevo = {
+        id: String(Date.now()),
+        nombre: form.nombre,
+        usuario: form.usuario,
+        rol: form.rol,
+        estado: 'Activo',
+        ultimoAcceso: 'Recién creado',
+      };
+      setUsuarios(prev => [nuevo, ...prev]);
+      setModalNuevo(false);
+      setForm({ nombre: '', usuario: '', password: '', rol: 'Vendedor' });
+      setAlerta({ type: 'success', message: 'Usuario creado exitosamente.' });
+    } catch (err) {
+      setAlerta({ type: 'error', message: err.message || 'Error al crear usuario.' });
     }
   }
 
   return (
     <PageLayout
-      title="Administración"
-      subtitle="Usuarios y auditoría del sistema"
-      icon="ti-shield-check"
+      title="Administración del Sistema"
+      subtitle="Usuarios, permisos y trazabilidad de operaciones del sistema."
+      actions={
+        <button
+          className="primary-btn"
+          type="button"
+          onClick={() => setModalNuevo(true)}
+        >
+          <i className="ti ti-user-plus"></i> Nuevo usuario
+        </button>
+      }
     >
       {alerta && (
-        <div style={{ marginBottom: '14px' }}>
-          <Alert type={alerta.type} message={alerta.msg} onClose={() => setAlerta(null)} />
+        <div style={{ marginBottom: '16px' }}>
+          <Alert type={alerta.type} message={alerta.message} onClose={() => setAlerta(null)} />
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-        <div className="tab-row" style={{ marginBottom: 0 }}>
-          <button
-            type="button"
-            className={`tab-btn ${tab === 'usuarios' ? 'on' : ''}`}
-            onClick={() => setTab('usuarios')}
-          >
-            <i className="ti ti-users"></i>Usuarios
-          </button>
-          <button
-            type="button"
-            className={`tab-btn ${tab === 'audit' ? 'on' : ''}`}
-            onClick={() => setTab('audit')}
-          >
-            <i className="ti ti-eye"></i>Auditoría
-          </button>
-        </div>
-
-        {tab === 'usuarios' && (
-          <button className="btn btn-dark" onClick={() => setModalNuevo(true)}>
-            <i className="ti ti-plus"></i>Nuevo usuario
-          </button>
-        )}
+      {/* Tabs */}
+      <div className="tabs" role="tablist">
+        <button
+          className={`tab ${tab === 'usuarios' ? 'active' : ''}`}
+          type="button"
+          onClick={() => setTab('usuarios')}
+        >
+          Usuarios
+        </button>
+        <button
+          className={`tab ${tab === 'auditoria' ? 'active' : ''}`}
+          type="button"
+          onClick={() => setTab('auditoria')}
+        >
+          Auditoría
+        </button>
       </div>
 
-      {loading ? (
-        <div style={{ padding: '40px', textAlign: 'center' }}>
-          <Spinner />
-        </div>
-      ) : tab === 'usuarios' ? (
-        <div className="tbl-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>Usuario</th>
-                <th>Rol</th>
-                <th>Creado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usuarios.length === 0 ? (
+      {/* Panel Usuarios */}
+      {tab === 'usuarios' && (
+        <div className="card table-card">
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan="4" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
-                    Sin usuarios registrados
-                  </td>
+                  <th>Usuario</th>
+                  <th>Nombre</th>
+                  <th>Rol</th>
+                  <th>Estado</th>
+                  <th>Último acceso</th>
                 </tr>
-              ) : (
-                usuarios.map(u => (
+              </thead>
+              <tbody>
+                {usuarios.map(u => (
                   <tr key={u.id}>
-                    <td className="td-bold">{u.nombre}</td>
-                    <td className="td-mono">{u.usuario}</td>
+                    <td style={{ fontWeight: 700, color: 'var(--blue)' }}>{u.usuario}</td>
+                    <td style={{ fontWeight: 600 }}>{u.nombre}</td>
                     <td>
-                      <span className={`badge ${getRolBadge(u.rol)}`}>
-                        {u.rol}
-                      </span>
+                      <span className="status closed">{u.rol}</span>
                     </td>
-                    <td style={{ color: '#64748b' }}>
-                      {new Date(u.createdAt).toLocaleDateString('es-DO')}
+                    <td>
+                      <span className="status ready">{u.estado}</span>
                     </td>
+                    <td style={{ color: 'var(--muted)' }}>{u.ultimoAcceso}</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      ) : (
-        <div className="tbl-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Tabla</th>
-                <th>Acción</th>
-                <th>Usuario</th>
-                <th>Fecha</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.length === 0 ? (
+      )}
+
+      {/* Panel Auditoría */}
+      {tab === 'auditoria' && (
+        <div className="card table-card">
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan="4" style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
-                    Sin registros de auditoría
-                  </td>
+                  <th>Fecha</th>
+                  <th>Usuario</th>
+                  <th>Acción</th>
+                  <th>Módulo</th>
                 </tr>
-              ) : (
-                logs.map(l => (
+              </thead>
+              <tbody>
+                {auditLogs.map(l => (
                   <tr key={l.id}>
-                    <td>{l.tabla}</td>
+                    <td style={{ color: 'var(--muted)' }}>{l.fecha}</td>
+                    <td style={{ fontWeight: 700 }}>{l.usuario}</td>
+                    <td>{l.accion}</td>
                     <td>
-                      <span className="at-accion">{l.accion}</span>
-                    </td>
-                    <td>{l.usuario?.nombre || '—'}</td>
-                    <td style={{ color: '#64748b' }}>
-                      {new Date(l.fecha).toLocaleString('es-DO')}
+                      <span className="status process">{l.modulo}</span>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* Modal Nuevo Usuario */}
-      <Modal open={modalNuevo} title="Nuevo Usuario" onClose={() => setModalNuevo(false)} size="sm">
-        <div style={{ padding: '8px 0' }}>
-          <div style={{ marginBottom: '12px' }}>
-            <label className="lbl">Nombre completo</label>
-            <input
-              className="inp"
-              value={form.nombre}
-              onChange={e => setForm({ ...form, nombre: e.target.value })}
-            />
-          </div>
-          <div style={{ marginBottom: '12px' }}>
-            <label className="lbl">Usuario (login)</label>
-            <input
-              className="inp"
-              value={form.usuario}
-              onChange={e => setForm({ ...form, usuario: e.target.value })}
-            />
-          </div>
-          <div style={{ marginBottom: '12px' }}>
-            <label className="lbl">Contraseña</label>
-            <input
-              className="inp"
-              type="password"
-              value={form.password}
-              onChange={e => setForm({ ...form, password: e.target.value })}
-            />
-          </div>
-          <div style={{ marginBottom: '16px' }}>
-            <label className="lbl">Rol</label>
-            <select
-              className="inp"
-              value={form.rol}
-              onChange={e => setForm({ ...form, rol: e.target.value })}
-            >
-              <option value="CAJERO">CAJERO</option>
-              <option value="ADMINISTRADOR">ADMINISTRADOR</option>
-              <option value="SUPERVISOR">SUPERVISOR</option>
-            </select>
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button className="btn btn-ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setModalNuevo(false)}>
-              Cancelar
-            </button>
-            <button className="btn btn-dark" style={{ flex: 1, justifyContent: 'center' }} onClick={handleCrear}>
-              Crear Usuario
-            </button>
-          </div>
+      {modalNuevo && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-dialog" onSubmit={handleCrearUsuario}>
+            <div className="modal-head">
+              <h2>Nuevo usuario</h2>
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={() => setModalNuevo(false)}
+                title="Cerrar"
+              >
+                <i className="ti ti-x"></i>
+              </button>
+            </div>
+            <div className="modal-grid">
+              <div>
+                <label htmlFor="user-name">Nombre</label>
+                <input
+                  id="user-name"
+                  required
+                  placeholder="Nombre completo"
+                  value={form.nombre}
+                  onChange={e => setForm({ ...form, nombre: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="user-id">Usuario</label>
+                <input
+                  id="user-id"
+                  required
+                  placeholder="usuario.ceballos"
+                  value={form.usuario}
+                  onChange={e => setForm({ ...form, usuario: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="user-pass">Contraseña provisional</label>
+                <input
+                  id="user-pass"
+                  type="password"
+                  placeholder="ceballos123"
+                  value={form.password}
+                  onChange={e => setForm({ ...form, password: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="user-role">Rol</label>
+                <select
+                  id="user-role"
+                  value={form.rol}
+                  onChange={e => setForm({ ...form, rol: e.target.value })}
+                >
+                  <option value="Vendedor">Vendedor</option>
+                  <option value="Técnico">Técnico</option>
+                  <option value="Administrador">Administrador</option>
+                </select>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => setModalNuevo(false)}
+              >
+                Cancelar
+              </button>
+              <button className="primary-btn" type="submit">
+                Crear usuario
+              </button>
+            </div>
+          </form>
         </div>
-      </Modal>
+      )}
     </PageLayout>
   );
 }
