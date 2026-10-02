@@ -7,7 +7,8 @@ module.exports = {
     "./src/renderer/components/**/*.{js,jsx,ts,tsx}",
     "./src/renderer/pages/**/*.{js,jsx,ts,tsx}",
     "./src/renderer/services/**/*.{js,jsx,ts,tsx}",
-    "./src/renderer/store/**/*.{js,jsx,ts,tsx}"
+    "./src/renderer/store/**/*.{js,jsx,ts,tsx}",
+    "./src/renderer/lib/**/*.{js,jsx,ts,tsx}"
   ],
   theme: {
     extend: {},

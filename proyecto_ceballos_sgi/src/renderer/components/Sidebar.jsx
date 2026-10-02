@@ -1,24 +1,16 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-
-const navItems = [
-  { path: '/pos',        label: 'Punto de Venta', icon: 'ti-shopping-cart', roles: ['ADMINISTRADOR','CAJERO'] },
-  { path: '/taller',     label: 'Taller',         icon: 'ti-tool',          roles: ['ADMINISTRADOR','CAJERO'] },
-  { path: '/inventario', label: 'Inventario',     icon: 'ti-package',       roles: ['ADMINISTRADOR','CAJERO'] },
-  { path: '/caja',       label: 'Caja',           icon: 'ti-wallet',        roles: ['ADMINISTRADOR','CAJERO'] },
-  { path: '/reportes',   label: 'Reportes',       icon: 'ti-chart-bar',     roles: ['ADMINISTRADOR'] },
-  { path: '/admin',      label: 'Admin',          icon: 'ti-settings-2',    roles: ['ADMINISTRADOR'] },
-];
+import { NAVEGACION, NOMBRE_ROL } from '../lib/navigation';
 
 export default function Sidebar({ collapsed = false }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuthStore();
 
-  const visibles = navItems.filter(item => item.roles.includes(user?.rol));
+  const visibles = NAVEGACION.filter(item => item.roles.includes(user?.rol));
   const initials = user?.nombre
     ? user.nombre.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase()
-    : 'AC';
+    : '—';
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
@@ -68,7 +60,7 @@ export default function Sidebar({ collapsed = false }) {
         <div className="avatar">{initials}</div>
         <div className="role-copy">
           <div className="role-title">{user?.nombre || 'Usuario'}</div>
-          <div className="role-text">Sesión activa ({user?.rol || 'CAJERO'})</div>
+          <div className="role-text">{NOMBRE_ROL[user?.rol] || 'Sin sesión'}</div>
         </div>
       </div>
     </aside>

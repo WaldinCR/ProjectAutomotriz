@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../store/authStore';
+import { useAuthStore, rutaInicial } from '../store/authStore';
+import { login } from '../services/authService';
 import logoImg from '../assets/login-logo-clean.png';
 
 export default function LoginPage() {
   const [form, setForm] = useState({ usuario: '', password: '' });
-  const [error, setError] = useState('');
+  // Si se llegó aquí por expiración de sesión, se muestra el motivo
+  const [error, setError] = useState(() => useAuthStore.getState().avisoSesion);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState('usuario');
@@ -20,9 +22,9 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await window.api.auth.login(form);
-      setAuth(res.usuario, res.token);
-      navigate('/pos');
+      const usuario = await login(form.usuario.trim(), form.password);
+      setAuth(usuario);
+      navigate(rutaInicial(usuario.rol));
     } catch (e) {
       setError(e.message || 'Credenciales incorrectas');
     } finally {

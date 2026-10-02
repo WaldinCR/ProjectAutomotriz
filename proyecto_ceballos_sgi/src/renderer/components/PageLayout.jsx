@@ -2,16 +2,15 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuthStore } from '../store/authStore';
+import { logout as cerrarSesion } from '../services/authService';
 
 export default function PageLayout({ children, title, subtitle, actions }) {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const { logout } = useAuthStore();
 
-  function handleLogout() {
-    if (window.api && window.api.auth) {
-      window.api.auth.logout();
-    }
+  async function handleLogout() {
+    await cerrarSesion().catch(() => {});
     logout();
     navigate('/login');
   }

@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import PageLayout from '../components/PageLayout';
 import Alert from '../components/Alert';
-import { reporteDiario, reporteMensual } from '../services/reportsService';
+import { reporteDiario, reporteMensual, reporteInventario, abrirReporte } from '../services/reportsService';
 import { useAuthStore } from '../store/authStore';
+import { hoyISO } from '../lib/format';
+
+const TIPOS = {
+  diario: 'Diario',
+  mensual: 'Mensual',
+  inventario: 'Inventario',
+};
 
 export default function ReportsPage() {
   const { user } = useAuthStore();
   const [tab, setTab] = useState('diario');
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(hoyISO());
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [anio, setAnio] = useState(new Date().getFullYear());
   const [alerta, setAlerta] = useState(null);
@@ -15,31 +22,28 @@ export default function ReportsPage() {
   const [recientes, setRecientes] = useState([]);
 
   async function handleGenerar() {
+    if (tab === 'diario' && fecha > hoyISO()) {
+      setAlerta({ type: 'error', msg: 'No se puede generar un reporte de una fecha futura' });
+      return;
+    }
     setCargando(true);
     try {
-      let res;
-      if (tab === 'diario') {
-        res = await reporteDiario(fecha);
-      } else {
-        res = await reporteMensual({ mes, anio });
-      }
+      let ruta;
+      if (tab === 'diario') ruta = await reporteDiario(fecha);
+      else if (tab === 'mensual') ruta = await reporteMensual({ mes, anio });
+      else ruta = await reporteInventario();
 
-      const nuevoReporte = {
+      setRecientes(prev => [{
         id: Date.now(),
-        periodo: tab === 'diario' ? fecha : `${mes}/${anio}`,
-        tipo: tab === 'diario' ? 'Diario' : 'Mensual',
+        periodo: tab === 'diario' ? fecha : tab === 'mensual' ? `${String(mes).padStart(2, '0')}/${anio}` : hoyISO(),
+        tipo: TIPOS[tab],
         fechaGen: new Date().toLocaleString('es-DO'),
-        usuario: user?.nombre || 'Administrador',
-        archivo: res?.filePath || 'Generado en Descargas'
-      };
-      setRecientes(prev => [nuevoReporte, ...prev]);
-
-      setAlerta({
-        type: 'success',
-        msg: `Reporte generado con éxito: ${res?.filePath || 'Revisa tu carpeta de Descargas'}`
-      });
+        usuario: user?.nombre,
+        ruta,
+      }, ...prev]);
+      setAlerta({ type: 'success', msg: `Reporte guardado en: ${ruta}` });
     } catch (e) {
-      setAlerta({ type: 'error', msg: e.message || 'Error al generar reporte' });
+      setAlerta({ type: 'error', msg: e.message });
     } finally {
       setCargando(false);
     }
@@ -48,8 +52,7 @@ export default function ReportsPage() {
   return (
     <PageLayout
       title="Reportes"
-      subtitle="Genera y exporta reportes de ventas"
-      icon="ti-chart-bar"
+      subtitle="Genera y exporta reportes de ventas e inventario"
     >
       {alerta && (
         <div style={{ marginBottom: '14px' }}>
@@ -79,6 +82,13 @@ export default function ReportsPage() {
               >
                 <i className="ti ti-calendar-month"></i>Mensual
               </button>
+              <button
+                type="button"
+                className={`period-btn ${tab === 'inventario' ? 'on' : ''}`}
+                onClick={() => setTab('inventario')}
+              >
+                <i className="ti ti-package"></i>Inventario
+              </button>
             </div>
 
             {tab === 'diario' ? (
@@ -89,31 +99,34 @@ export default function ReportsPage() {
                   <input
                     className="inp"
                     type="date"
+                    max={hoyISO()}
                     value={fecha}
                     onChange={e => setFecha(e.target.value)}
                   />
                 </div>
               </div>
+            ) : tab === 'inventario' ? (
+              <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '14px' }}>
+                Existencias actuales, productos bajo el mínimo y movimientos de los últimos 30 días.
+              </p>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
                 <div>
                   <label className="lbl">Mes</label>
-                  <input
-                    className="inp"
-                    type="number"
-                    min="1"
-                    max="12"
-                    value={mes}
-                    onChange={e => setMes(parseInt(e.target.value) || 1)}
-                  />
+                  <select className="inp" value={mes} onChange={e => setMes(Number(e.target.value))}>
+                    {['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+                      .map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="lbl">Año</label>
                   <input
                     className="inp"
                     type="number"
+                    min="2000"
+                    max={new Date().getFullYear()}
                     value={anio}
-                    onChange={e => setAnio(parseInt(e.target.value) || 2026)}
+                    onChange={e => setAnio(parseInt(e.target.value) || new Date().getFullYear())}
                   />
                 </div>
               </div>
@@ -130,7 +143,7 @@ export default function ReportsPage() {
 
             <div style={{ textAlign: 'center', fontSize: '12px', color: '#94a3b8', marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
               <i className="ti ti-info-circle" style={{ fontSize: '14px' }}></i>
-              El reporte se guardará en la carpeta del sistema
+              El reporte PDF se guardará en su carpeta de Descargas
             </div>
           </div>
 
@@ -158,7 +171,7 @@ export default function ReportsPage() {
               <th>Tipo</th>
               <th>Fecha generación</th>
               <th>Usuario</th>
-              <th>Estado</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -179,7 +192,11 @@ export default function ReportsPage() {
                   <td><span className="badge bg-blue">{r.tipo}</span></td>
                   <td style={{ color: '#64748b' }}>{r.fechaGen}</td>
                   <td>{r.usuario}</td>
-                  <td><span className="badge bg-green">Generado</span></td>
+                  <td>
+                    <button className="btn btn-ghost btn-sm" onClick={() => abrirReporte(r.ruta).catch(e => setAlerta({ type: 'error', msg: e.message }))}>
+                      <i className="ti ti-external-link" style={{ fontSize: '12px' }}></i>Abrir
+                    </button>
+                  </td>
                 </tr>
               ))
             )}

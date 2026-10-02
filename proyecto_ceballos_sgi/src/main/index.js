@@ -14,6 +14,8 @@ const sesiones = require('./core/session');
 const prisma = require('./core/prisma');
 
 const DEV_URL = 'http://localhost:5173';
+// `npm run dev` pasa --dev: siempre usa Vite aunque exista un dist/ antiguo
+const ES_DEV = process.argv.includes('--dev') || process.env.VITE_DEV === 'true';
 let expressServer = null;
 
 function createWindow() {
@@ -41,9 +43,9 @@ function createWindow() {
   });
 
   const distHtml = path.resolve(__dirname, '../../dist/index.html');
-  if (process.env.VITE_DEV === 'true' || !fs.existsSync(distHtml)) {
+  if (ES_DEV || !fs.existsSync(distHtml)) {
     win.loadURL(DEV_URL);
-    if (process.env.VITE_DEV === 'true') win.webContents.openDevTools();
+    if (ES_DEV) win.webContents.openDevTools();
   } else {
     win.loadFile(distHtml);
   }
