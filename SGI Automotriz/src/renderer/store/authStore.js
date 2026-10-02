@@ -1,0 +1,10 @@
+// Estado global de autenticación (Zustand)
+import { create } from 'zustand';
+
+export const useAuthStore = create((set) => ({
+  user:  null,
+  token: null,
+
+  setAuth: (user, token) => set({ user, token }),
+  logout:  () => set({ user: null, token: null }),
+}));
