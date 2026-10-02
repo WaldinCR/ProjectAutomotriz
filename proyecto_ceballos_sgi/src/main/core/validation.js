@@ -39,6 +39,12 @@ const password = z.string({ required_error: 'La contraseña es requerida' })
   .min(8, 'La contraseña debe tener al menos 8 caracteres')
   .max(72, 'La contraseña no puede exceder 72 caracteres'); // límite de bcrypt
 
+const comprobante = {
+  tipoComprobante: z.enum(['B01', 'B02', 'B14', 'B15'], { errorMap: () => ({ message: 'Tipo de comprobante no válido' }) }).optional(),
+  clienteNombre: textoOpcional(120),
+  clienteRnc: textoOpcional(20),
+};
+
 const rol = z.enum(Object.values(ROLES), { errorMap: () => ({ message: 'Rol no válido' }) });
 
 // ── Autenticación ────────────────────────────────
@@ -81,6 +87,7 @@ const productoBase = {
   precioCompra: monto('El precio de compra'),
   precioVenta: monto('El precio de venta'),
   stockMinimo: entero('El stock mínimo').default(5),
+  exentoItbis: z.boolean().default(false),
 };
 
 const crearProducto = z.object(productoBase).extend({
@@ -99,6 +106,7 @@ const editarProducto = z.object({
   precioCompra: productoBase.precioCompra.optional(),
   precioVenta: productoBase.precioVenta.optional(),
   stockMinimo: entero('El stock mínimo').optional(),
+  exentoItbis: z.boolean().optional(),
   activo: z.boolean().optional(),
 });
 
@@ -120,16 +128,22 @@ const busqueda = z.string().trim().min(1, 'Ingrese un término de búsqueda').ma
 
 // ── POS ──────────────────────────────────────────
 // Solo se aceptan productoId y cantidad: precios y totales los calcula el servidor
-const confirmarVenta = z.object({
-  items: z.array(z.object({
-    productoId: id('El producto'),
-    cantidad: entero('La cantidad', 1),
-    descuento: monto('El descuento').default(0),
-  }), { required_error: 'El carrito de compras no puede estar vacío' })
-    .min(1, 'El carrito de compras no puede estar vacío')
-    .max(200, 'Demasiados artículos en una sola venta'),
-  metodoPago,
+const itemsVenta = z.array(z.object({
+  productoId: id('El producto'),
+  cantidad: entero('La cantidad', 1),
+  descuento: monto('El descuento').default(0),
+}), { required_error: 'El carrito de compras no puede estar vacío' })
+  .min(1, 'El carrito de compras no puede estar vacío')
+  .max(200, 'Demasiados artículos en una sola venta');
+
+const calcularVenta = z.object({
+  items: itemsVenta,
   descuentoTotal: monto('El descuento').default(0),
+});
+
+const confirmarVenta = calcularVenta.extend({
+  metodoPago,
+  ...comprobante,
 });
 
 const anularVenta = z.object({
@@ -142,18 +156,21 @@ const listarVentas = z.object({ fecha: fechaISO.optional() }).default({});
 // ── Taller ───────────────────────────────────────
 const ESTADOS_OT = ['PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'FACTURADA', 'CANCELADA'];
 
+const itemOrden = z.object({
+  servicio: textoOpcional(120),
+  productoId: id('El repuesto').optional().nullable().or(z.literal('').transform(() => null)),
+  cantidad: entero('La cantidad', 1),
+  precioUnitario: monto('El precio unitario').optional(),
+});
+
 const crearOrden = z.object({
   vehiculo: texto('El vehículo', 100),
+  tecnicoId: id('El técnico').optional().nullable(),
   placa: textoOpcional(15).transform(v => (v ? v.toUpperCase() : null)),
   cliente: texto('El nombre del cliente', 100),
   telefono: textoOpcional(20).refine(v => !v || /^[0-9+()\-\s]{7,20}$/.test(v), 'El teléfono no es válido'),
   descripcion: textoOpcional(500),
-  items: z.array(z.object({
-    servicio: textoOpcional(120),
-    productoId: id('El repuesto').optional().nullable().or(z.literal('').transform(() => null)),
-    cantidad: entero('La cantidad', 1),
-    precioUnitario: monto('El precio unitario').optional(),
-  }), { required_error: 'Debe agregar al menos un servicio o repuesto' })
+  items: z.array(itemOrden, { required_error: 'Debe agregar al menos un servicio o repuesto' })
     .min(1, 'Debe agregar al menos un servicio o repuesto')
     .max(100, 'Demasiadas líneas en la orden'),
 });
@@ -167,7 +184,23 @@ const cambiarEstado = z.object({
 const facturarOrden = z.object({
   ordenId: id('La orden'),
   metodoPago,
+  ...comprobante,
 });
+
+const asignarTecnico = z.object({
+  ordenId: id('La orden'),
+  tecnicoId: id('El técnico').nullable(),
+});
+
+const agregarItemOrden = z.object({ ordenId: id('La orden'), item: itemOrden });
+const quitarItemOrden = z.object({ ordenId: id('La orden'), detalleId: id('La línea') });
+
+const filtrosOrdenes = z.object({
+  estado: z.enum(ESTADOS_OT).optional().or(z.literal('').transform(() => undefined)),
+  tecnicoId: id('El técnico').optional().nullable().or(z.literal('').transform(() => undefined)),
+  desde: fechaISO.optional().or(z.literal('').transform(() => undefined)),
+  hasta: fechaISO.optional().or(z.literal('').transform(() => undefined)),
+}).default({});
 
 // ── Caja ─────────────────────────────────────────
 const confirmarCierre = z.object({
@@ -177,12 +210,48 @@ const confirmarCierre = z.object({
 
 // ── Reportes ─────────────────────────────────────
 const reporteDiario = fechaISO;
+const reporteVentas = z.object({
+  desde: fechaISO,
+  hasta: fechaISO,
+  usuarioId: id('El empleado').optional().nullable().or(z.literal('').transform(() => undefined)),
+  productoId: id('El producto').optional().nullable().or(z.literal('').transform(() => undefined)),
+}).refine(f => f.desde <= f.hasta, { message: 'La fecha inicial no puede ser posterior a la final' });
+
 const reporteMensual = z.object({
   mes: z.coerce.number().int().min(1, 'El mes debe estar entre 1 y 12').max(12, 'El mes debe estar entre 1 y 12'),
   anio: z.coerce.number().int().min(2000, 'Año no válido').max(2100, 'Año no válido'),
 });
 
+// ── Configuración ────────────────────────────────
+const actualizarConfig = z.object({
+  nombreEmpresa: texto('El nombre de la empresa', 100).optional(),
+  eslogan: textoOpcional(120),
+  rnc: textoOpcional(20),
+  direccion: textoOpcional(200),
+  telefono: textoOpcional(30),
+  email: z.string().trim().email('Correo electrónico no válido').max(100).optional().nullable().or(z.literal('').transform(() => null)),
+  tasaItbis: z.coerce.number().min(0, 'Tasa no válida').max(0.5, 'Tasa no válida').optional(),
+  preciosIncluyenItbis: z.boolean().optional(),
+  emitirNcf: z.boolean().optional(),
+  impresoraTipo: z.enum(['NINGUNA', 'RED', 'COMPARTIDA'], { errorMap: () => ({ message: 'Tipo de impresora no válido' }) }).optional(),
+  impresoraDestino: textoOpcional(200),
+  impresoraAncho: z.coerce.number().int().min(24, 'Ancho no válido').max(64, 'Ancho no válido').optional(),
+  imprimirAutomatico: z.boolean().optional(),
+  piePagina: textoOpcional(200),
+});
+
+const guardarSecuencia = z.object({
+  tipo: z.enum(['B01', 'B02', 'B14', 'B15'], { errorMap: () => ({ message: 'Tipo de comprobante no válido' }) }),
+  siguiente: entero('El número inicial', 1),
+  hasta: entero('El número final', 1),
+  vencimiento: fechaISO.optional().nullable().or(z.literal('').transform(() => null)),
+  activo: z.boolean().default(true),
+}).refine(s => s.hasta >= s.siguiente, { message: 'El número final debe ser mayor o igual al inicial' })
+  .refine(s => s.hasta <= 99_999_999, { message: 'El NCF admite como máximo 8 dígitos de secuencia' });
+
 module.exports = {
+  comprobante, actualizarConfig, guardarSecuencia, calcularVenta,
+  asignarTecnico, agregarItemOrden, quitarItemOrden, filtrosOrdenes, reporteVentas,
   METODOS_PAGO, ESTADOS_OT,
   login, crearUsuario, editarUsuario, restablecerPassword, filtrosAudit,
   crearProducto, editarProducto, entradaInventario, ajusteInventario, busqueda,

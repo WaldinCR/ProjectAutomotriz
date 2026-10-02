@@ -17,7 +17,7 @@ model Usuario {
   nombre        String
   usuario       String   @unique
   passwordHash  String
-  rol           String   @default("CAJERO") // ADMINISTRADOR | CAJERO | SUPERVISOR
+  rol           String   @default("CAJERO") // ADMINISTRADOR | CAJERO | SUPERVISOR | TECNICO
   activo        Boolean  @default(true)
   intentosFallidos Int     @default(0)  // RF-06: bloqueo tras 5 intentos
   bloqueadoHasta   DateTime?
@@ -26,7 +26,8 @@ model Usuario {
   updatedAt     DateTime @updatedAt
 
   ventas        Venta[]
-  ordenes       OrdenTrabajo[]
+  ordenes       OrdenTrabajo[] @relation("OrdenCreador")
+  ordenesTecnico OrdenTrabajo[] @relation("OrdenTecnico")
   cierres       CierreCaja[]
   movimientos   MovimientoInventario[]
   auditLogs     AuditLog[]
@@ -42,6 +43,7 @@ model Producto {
   precioVenta    Float
   stock          Int      @default(0)
   stockMinimo    Int      @default(5)
+  exentoItbis    Boolean  @default(false) // Productos exentos de ITBIS
   activo         Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -57,8 +59,15 @@ model Venta {
   fecha            DateTime    @default(now())
   usuarioId        Int
   usuario          Usuario     @relation(fields: [usuarioId], references: [id])
+  subtotal         Float       @default(0) // Base imponible + exento, sin ITBIS
+  itbis            Float       @default(0)
   descuento        Float       @default(0) // Descuento global (RF-12)
   total            Float
+  // Comprobante fiscal (DGII). ncf es null si no se emiten comprobantes.
+  tipoComprobante  String?     // B01 crédito fiscal | B02 consumo | B14 régimen especial | B15 gubernamental
+  ncf              String?     @unique
+  clienteNombre    String?
+  clienteRnc       String?
   metodoPago       String      // EFECTIVO | TARJETA | TRANSFERENCIA
   estado           String      @default("CONFIRMADA") // CONFIRMADA | ANULADA
   motivoAnulacion  String?
@@ -79,6 +88,7 @@ model DetalleVenta {
   cantidad        Int
   precioUnitario  Float
   descuento       Float     @default(0)
+  itbis           Float     @default(0)
   subtotal        Float
 }
 
@@ -90,7 +100,9 @@ model OrdenTrabajo {
   telefono       String?
   descripcion    String?
   usuarioId      Int
-  usuario        Usuario  @relation(fields: [usuarioId], references: [id])
+  usuario        Usuario  @relation("OrdenCreador", fields: [usuarioId], references: [id])
+  tecnicoId      Int?
+  tecnico        Usuario? @relation("OrdenTecnico", fields: [tecnicoId], references: [id])
   estado         String   @default("PENDIENTE") // PENDIENTE | EN_PROCESO | COMPLETADA | FACTURADA | CANCELADA
   total          Float    @default(0)
   fechaCreacion  DateTime @default(now())
@@ -101,6 +113,7 @@ model OrdenTrabajo {
   detalles       DetalleOrden[]
 
   @@index([fechaCreacion])
+  @@index([tecnicoId])
 }
 
 model DetalleOrden {
@@ -157,4 +170,37 @@ model AuditLog {
   fecha            DateTime @default(now())
 
   @@index([fecha])
+}
+
+// Datos de la empresa y parámetros fiscales/operativos (una sola fila, id = 1)
+model Configuracion {
+  id                   Int      @id @default(1)
+  nombreEmpresa        String   @default("Repuestos Ceballos")
+  eslogan              String?  @default("Repuestos y Taller Automotriz")
+  rnc                  String?
+  direccion            String?
+  telefono             String?
+  email                String?
+  tasaItbis            Float    @default(0.18)
+  preciosIncluyenItbis Boolean  @default(true) // Precio de venta ya trae el ITBIS
+  emitirNcf            Boolean  @default(false)
+  // Impresora térmica ESC/POS: NINGUNA | RED (tcp://ip:9100) | COMPARTIDA (ruta de impresora compartida de Windows)
+  impresoraTipo        String   @default("NINGUNA")
+  impresoraDestino     String?
+  impresoraAncho       Int      @default(48)  // Caracteres por línea (80 mm = 48, 58 mm = 32)
+  imprimirAutomatico   Boolean  @default(false)
+  piePagina            String?  @default("¡Gracias por su compra!")
+  updatedAt            DateTime @updatedAt
+}
+
+// Secuencias de Números de Comprobante Fiscal autorizadas por la DGII
+model SecuenciaNcf {
+  id           Int       @id @default(autoincrement())
+  tipo         String    @unique // B01 | B02 | B14 | B15
+  descripcion  String
+  siguiente    Int       @default(1)
+  hasta        Int
+  vencimiento  DateTime?
+  activo       Boolean   @default(true)
+  updatedAt    DateTime  @updatedAt
 }

@@ -1,12 +1,14 @@
 // Servicio de Punto de Venta (RF-08 a RF-18)
-// Los precios y totales SIEMPRE se calculan aquí a partir de la base de datos;
-// del renderer solo se aceptan productoId, cantidad y descuentos.
+// Los precios, el ITBIS y los totales SIEMPRE se calculan aquí a partir de la
+// base de datos; del renderer solo se aceptan productoId, cantidad y descuentos.
 const crypto = require('crypto');
 const prisma = require('../core/prisma');
 const auditService = require('../audit/audit.service');
 const schemas = require('../core/validation');
 const { AppError } = require('../core/errors');
 const { dinero, rangoDia } = require('../core/dates');
+const { calcularVenta: calcularImpuestos, validarComprobante, normalizarRnc, tomarNcf } = require('../core/fiscal');
+const configService = require('../config/config.service');
 
 // Búsqueda exacta por código de barras o código interno (lector USB)
 function buscarProducto(codigo) {
@@ -34,10 +36,84 @@ async function descontarStock(tx, productoId, cantidad, nombre) {
   }
 }
 
-async function confirmarVenta(datos, actor) {
-  const { items, metodoPago, descuentoTotal } = schemas.confirmarVenta.parse(datos);
+// Datos que necesita la factura en pantalla, PDF y ticket
+const VENTA_COMPLETA = {
+  detalles: { include: { producto: { select: { nombre: true, codigoInterno: true } } } },
+  usuario: { select: { nombre: true } },
+  ordenTrabajo: { select: { id: true, vehiculo: true, placa: true, cliente: true } },
+};
 
-  // Agrupa líneas repetidas del mismo producto para validar el stock total
+// Resuelve el comprobante fiscal según la configuración de la empresa
+function resolverComprobante(datos, config) {
+  if (config.emitirNcf) {
+    return validarComprobante({ ...datos, tipoComprobante: datos.tipoComprobante || 'B02' });
+  }
+  // Sin NCF se guardan los datos del cliente si se indicaron, sin comprobante fiscal
+  return {
+    tipoComprobante: null,
+    clienteNombre: datos.clienteNombre || null,
+    clienteRnc: datos.clienteRnc ? normalizarRnc(datos.clienteRnc) : null,
+  };
+}
+
+/**
+ * Crea una venta completa dentro de una transacción: ITBIS, NCF, número de
+ * factura correlativo y auditoría. La usan el POS y la facturación de OT.
+ * lineas: [{ productoId, servicio, cantidad, precioUnitario, descuento, exento }]
+ */
+async function registrarVenta(tx, { actor, lineas, descuentoTotal = 0, metodoPago, comprobante, ordenId }) {
+  const config = await configService.obtener(tx);
+  const fiscal = resolverComprobante(comprobante || {}, config);
+  const calculo = calcularImpuestos(
+    lineas.map(l => ({ importe: dinero(l.precioUnitario * l.cantidad - (l.descuento || 0)), exento: !!l.exento })),
+    descuentoTotal,
+    config,
+  );
+  const ncf = fiscal.tipoComprobante ? await tomarNcf(tx, fiscal.tipoComprobante) : null;
+
+  // Se crea con un número temporal y luego se asigna el correlativo por id
+  const creada = await tx.venta.create({
+    data: {
+      numeroFactura: `TMP-${crypto.randomUUID()}`,
+      usuarioId: actor.id,
+      subtotal: calculo.subtotal,
+      itbis: calculo.itbis,
+      descuento: calculo.descuento,
+      total: calculo.total,
+      metodoPago,
+      ...fiscal,
+      ncf,
+      detalles: {
+        create: lineas.map((l, i) => ({
+          productoId: l.productoId || null,
+          servicio: l.servicio || null,
+          cantidad: l.cantidad,
+          precioUnitario: l.precioUnitario,
+          descuento: dinero(l.descuento || 0),
+          itbis: calculo.lineas[i].itbis,
+          subtotal: dinero(l.precioUnitario * l.cantidad - (l.descuento || 0)),
+        })),
+      },
+    },
+  });
+  const venta = await tx.venta.update({
+    where: { id: creada.id },
+    data: { numeroFactura: formatearFactura(creada.id) },
+    include: VENTA_COMPLETA,
+  });
+
+  await auditService.registrar({
+    tabla: 'Venta', accion: 'CONFIRMAR_VENTA', registroId: venta.id, usuarioId: actor.id,
+    datosNuevos: {
+      numeroFactura: venta.numeroFactura, ncf, total: venta.total, itbis: venta.itbis,
+      metodoPago, descuento: venta.descuento, lineas: lineas.length, ...(ordenId && { ordenId }),
+    },
+  }, tx);
+  return venta;
+}
+
+// Agrupa líneas repetidas del mismo producto y las completa con los datos de la BD
+async function prepararLineas(tx, items) {
   const agrupados = new Map();
   for (const it of items) {
     const previo = agrupados.get(it.productoId);
@@ -47,69 +123,60 @@ async function confirmarVenta(datos, actor) {
       descuento: (previo?.descuento || 0) + it.descuento,
     });
   }
+  const productos = await tx.producto.findMany({ where: { id: { in: [...agrupados.keys()] } } });
+  const porId = new Map(productos.map(p => [p.id, p]));
+
+  return [...agrupados.values()].map((it) => {
+    const p = porId.get(it.productoId);
+    if (!p || !p.activo) throw new AppError(`El producto #${it.productoId} no existe o está inactivo`, 'NO_ENCONTRADO');
+    const bruto = dinero(p.precioVenta * it.cantidad);
+    if (it.descuento > bruto) throw new AppError(`El descuento de "${p.nombre}" supera su importe`);
+    return {
+      productoId: p.id, nombre: p.nombre, cantidad: it.cantidad, stock: p.stock,
+      precioUnitario: p.precioVenta, descuento: dinero(it.descuento), exento: p.exentoItbis,
+    };
+  });
+}
+
+// Vista previa de totales e ITBIS para la pantalla del POS (no guarda nada)
+async function calcularVenta(datos) {
+  const { items, descuentoTotal } = schemas.calcularVenta.parse(datos);
+  const lineas = await prepararLineas(prisma, items);
+  const config = await configService.obtener();
+  const calculo = calcularImpuestos(
+    lineas.map(l => ({ importe: dinero(l.precioUnitario * l.cantidad - l.descuento), exento: l.exento })),
+    descuentoTotal,
+    config,
+  );
+  return { ...calculo, lineas: undefined, preciosIncluyenItbis: config.preciosIncluyenItbis, tasaItbis: config.tasaItbis };
+}
+
+async function confirmarVenta(datos, actor) {
+  const { items, metodoPago, descuentoTotal, tipoComprobante, clienteNombre, clienteRnc } = schemas.confirmarVenta.parse(datos);
 
   return prisma.$transaction(async (tx) => {
-    const productos = await tx.producto.findMany({ where: { id: { in: [...agrupados.keys()] } } });
-    const porId = new Map(productos.map(p => [p.id, p]));
+    const lineas = await prepararLineas(tx, items);
+    for (const l of lineas) await descontarStock(tx, l.productoId, l.cantidad, l.nombre);
 
-    const detalles = [];
-    for (const it of agrupados.values()) {
-      const p = porId.get(it.productoId);
-      if (!p || !p.activo) throw new AppError(`El producto #${it.productoId} no existe o está inactivo`, 'NO_ENCONTRADO');
-
-      const bruto = dinero(p.precioVenta * it.cantidad);
-      if (it.descuento > bruto) throw new AppError(`El descuento de "${p.nombre}" supera su importe`);
-      detalles.push({
-        productoId: p.id,
-        nombre: p.nombre,
-        cantidad: it.cantidad,
-        precioUnitario: p.precioVenta,
-        descuento: dinero(it.descuento),
-        subtotal: dinero(bruto - it.descuento),
-      });
-    }
-
-    const subtotal = dinero(detalles.reduce((s, d) => s + d.subtotal, 0));
-    if (descuentoTotal > subtotal) throw new AppError('El descuento no puede ser mayor que el total de la venta');
-    const total = dinero(subtotal - descuentoTotal);
-
-    for (const d of detalles) await descontarStock(tx, d.productoId, d.cantidad, d.nombre);
-
-    // Se crea con un número temporal y luego se asigna el correlativo por id
-    const creada = await tx.venta.create({
-      data: {
-        numeroFactura: `TMP-${crypto.randomUUID()}`,
-        usuarioId: actor.id,
-        descuento: dinero(descuentoTotal),
-        total,
-        metodoPago,
-        detalles: {
-          create: detalles.map(({ nombre, ...d }) => d),
-        },
-      },
-    });
-    const numeroFactura = formatearFactura(creada.id);
-    const venta = await tx.venta.update({
-      where: { id: creada.id },
-      data: { numeroFactura },
-      include: {
-        detalles: { include: { producto: { select: { nombre: true, codigoInterno: true } } } },
-        usuario: { select: { nombre: true } },
-      },
+    const venta = await registrarVenta(tx, {
+      actor, lineas, descuentoTotal, metodoPago,
+      comprobante: { tipoComprobante, clienteNombre, clienteRnc },
     });
 
     await tx.movimientoInventario.createMany({
-      data: detalles.map(d => ({
-        productoId: d.productoId, usuarioId: actor.id, tipo: 'SALIDA', cantidad: d.cantidad, motivo: `Venta ${numeroFactura}`,
+      data: lineas.map(l => ({
+        productoId: l.productoId, usuarioId: actor.id, tipo: 'SALIDA', cantidad: l.cantidad, motivo: `Venta ${venta.numeroFactura}`,
       })),
     });
-    await auditService.registrar({
-      tabla: 'Venta', accion: 'CONFIRMAR_VENTA', registroId: venta.id, usuarioId: actor.id,
-      datosNuevos: { numeroFactura, total, metodoPago, descuento: descuentoTotal, items: detalles.length },
-    }, tx);
-
     return venta;
   });
+}
+
+async function obtenerVenta(ventaId) {
+  const id = schemas.id('La venta').parse(ventaId);
+  const venta = await prisma.venta.findUnique({ where: { id }, include: VENTA_COMPLETA });
+  if (!venta) throw new AppError('Venta no encontrada', 'NO_ENCONTRADO');
+  return venta;
 }
 
 // RF-16 / RF-17: anulación con justificación; la venta se conserva en el historial
@@ -180,12 +247,12 @@ function listarVentas(filtros) {
   const { inicio, fin } = rangoDia(fecha);
   return prisma.venta.findMany({
     where: { fecha: { gte: inicio, lt: fin } },
-    include: {
-      usuario: { select: { nombre: true } },
-      detalles: { include: { producto: { select: { nombre: true } } } },
-    },
+    include: VENTA_COMPLETA,
     orderBy: { fecha: 'desc' },
   });
 }
 
-module.exports = { buscarProducto, confirmarVenta, anularVenta, listarVentas, descontarStock, formatearFactura };
+module.exports = {
+  buscarProducto, calcularVenta, confirmarVenta, anularVenta, listarVentas, obtenerVenta,
+  registrarVenta, descontarStock, formatearFactura, VENTA_COMPLETA,
+};

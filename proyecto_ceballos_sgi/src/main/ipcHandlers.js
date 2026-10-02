@@ -7,11 +7,11 @@
 //  3. La respuesta siempre es { ok: true, data } o { ok: false, error: { code, message } }
 //     para que el renderer reciba mensajes claros y el código del error.
 const path = require('path');
-const { ipcMain, shell, app } = require('electron');
+const { ipcMain, shell } = require('electron');
 
 const sesiones = require('./core/session');
 const { normalizarError, AppError } = require('./core/errors');
-const { TODOS, OPERADORES, SOLO_ADMIN, ADMIN_SUPERVISOR } = require('./core/roles');
+const { TODOS, OPERADORES, SOLO_ADMIN, ADMIN_SUPERVISOR, GESTION, TALLER } = require('./core/roles');
 
 const authService = require('./auth/auth.service');
 const posService = require('./pos/pos.service');
@@ -21,6 +21,8 @@ const cashierService = require('./cashier/cashier.service');
 const reportsService = require('./reports/reports.service');
 const adminService = require('./admin/admin.service');
 const backupService = require('./backup/backup.service');
+const configService = require('./config/config.service');
+const printerService = require('./printer/printer.service');
 
 async function responder(fn) {
   try {
@@ -43,18 +45,30 @@ function protegido(canal, roles, fn) {
   }));
 }
 
-// Solo se abren PDFs de reportes generados por el sistema en la carpeta de descargas
-function abrirReporte(ruta) {
+// Solo se abren documentos generados por el sistema dentro de su carpeta
+function abrirDocumento(ruta) {
   const destino = path.resolve(String(ruta || ''));
-  const carpeta = path.resolve(process.env.REPORTS_DIR || app.getPath('downloads'));
-  const nombre = path.basename(destino);
-  if (path.dirname(destino) !== carpeta || !/^Reporte_[\w-]+\.pdf$/.test(nombre)) {
-    throw new AppError('Archivo de reporte no válido');
+  const base = path.resolve(reportsService.carpetaBase());
+  const relativa = path.relative(base, destino);
+  if (relativa.startsWith('..') || path.isAbsolute(relativa) || !/\.(pdf|csv)$/i.test(destino)) {
+    throw new AppError('Documento no válido');
   }
   return shell.openPath(destino).then((err) => {
-    if (err) throw new AppError(`No se pudo abrir el reporte: ${err}`);
+    if (err) throw new AppError(`No se pudo abrir el documento: ${err}`);
     return true;
   });
+}
+
+// Imprime el ticket si la empresa lo configuró; un fallo de impresora nunca anula la venta
+async function conImpresionAutomatica(venta) {
+  const config = await configService.obtener();
+  if (!config.imprimirAutomatico || config.impresoraTipo === 'NINGUNA') return venta;
+  try {
+    await printerService.imprimirVenta(venta.id);
+    return { ...venta, impresion: { ok: true } };
+  } catch (error) {
+    return { ...venta, impresion: { ok: false, mensaje: normalizarError(error).message } };
+  }
 }
 
 function registerIpcHandlers() {
@@ -70,17 +84,27 @@ function registerIpcHandlers() {
   });
   protegido('auth:sesion', TODOS, (_datos, usuario) => usuario);
 
+  // ── Configuración de la empresa ────────────────
+  protegido('config:obtener', TODOS, () => configService.obtener());
+  protegido('config:actualizar', SOLO_ADMIN, (datos, u) => configService.actualizar(datos, u));
+  protegido('config:secuencias', SOLO_ADMIN, () => configService.listarSecuencias());
+  protegido('config:guardarSecuencia', SOLO_ADMIN, (datos, u) => configService.guardarSecuencia(datos, u));
+  protegido('printer:prueba', SOLO_ADMIN, () => printerService.imprimirPrueba());
+  protegido('printer:venta', GESTION, (ventaId) => printerService.imprimirVenta(ventaId));
+
   // ── Punto de Venta (POS) ───────────────────────
   protegido('pos:buscarProducto', OPERADORES, (codigo) => posService.buscarProducto(codigo));
-  protegido('pos:confirmarVenta', OPERADORES, (datos, u) => posService.confirmarVenta(datos, u));
+  protegido('pos:calcular', OPERADORES, (datos) => posService.calcularVenta(datos));
+  protegido('pos:confirmarVenta', OPERADORES, async (datos, u) => conImpresionAutomatica(await posService.confirmarVenta(datos, u)));
   protegido('pos:anularVenta', ADMIN_SUPERVISOR, (datos, u) => posService.anularVenta(datos, u));
-  protegido('pos:listarVentas', TODOS, (filtros) => posService.listarVentas(filtros));
+  protegido('pos:listarVentas', GESTION, (filtros) => posService.listarVentas(filtros));
+  protegido('pos:obtenerVenta', GESTION, (ventaId) => posService.obtenerVenta(ventaId));
 
   // ── Inventario ─────────────────────────────────
   protegido('inventory:listar', TODOS, (opciones, u) =>
     inventoryService.listarProductos({ incluirInactivos: u.rol === 'ADMINISTRADOR' && !!opciones?.incluirInactivos }));
   protegido('inventory:buscar', TODOS, (termino) => inventoryService.buscarProductos(termino));
-  protegido('inventory:stockBajo', TODOS, () => inventoryService.productosStockBajo());
+  protegido('inventory:stockBajo', GESTION, () => inventoryService.productosStockBajo());
   protegido('inventory:crear', SOLO_ADMIN, (datos, u) => inventoryService.crearProducto(datos, u));
   protegido('inventory:editar', SOLO_ADMIN, (datos, u) => inventoryService.editarProducto(datos, u));
   protegido('inventory:entrada', SOLO_ADMIN, (datos, u) => inventoryService.registrarEntrada(datos, u));
@@ -89,20 +113,28 @@ function registerIpcHandlers() {
 
   // ── Taller (Órdenes de Trabajo) ─────────────────
   protegido('workshop:crear', OPERADORES, (datos, u) => workshopService.crearOrden(datos, u));
-  protegido('workshop:listar', TODOS, () => workshopService.listarOrdenes());
-  protegido('workshop:estado', OPERADORES, (datos, u) => workshopService.cambiarEstado(datos, u));
-  protegido('workshop:facturar', OPERADORES, (datos, u) => workshopService.facturarOrden(datos, u));
+  protegido('workshop:listar', TODOS, (filtros, u) => workshopService.listarOrdenes(filtros, u));
+  protegido('workshop:tecnicos', TODOS, () => workshopService.listarTecnicos());
+  protegido('workshop:asignar', OPERADORES, (datos, u) => workshopService.asignarTecnico(datos, u));
+  protegido('workshop:agregarItem', TALLER, (datos, u) => workshopService.agregarItem(datos, u));
+  protegido('workshop:quitarItem', TALLER, (datos, u) => workshopService.quitarItem(datos, u));
+  protegido('workshop:estado', TALLER, (datos, u) => workshopService.cambiarEstado(datos, u));
+  protegido('workshop:facturar', OPERADORES, async (datos, u) => conImpresionAutomatica(await workshopService.facturarOrden(datos, u)));
 
   // ── Caja ───────────────────────────────────────
-  protegido('cashier:resumen', TODOS, () => cashierService.resumenTurno());
+  protegido('cashier:resumen', GESTION, () => cashierService.resumenTurno());
   protegido('cashier:cierre', OPERADORES, (datos, u) => cashierService.confirmarCierre(datos, u));
   protegido('cashier:historial', SOLO_ADMIN, () => cashierService.listarCierres());
 
-  // ── Reportes ───────────────────────────────────
-  protegido('reports:diario', ADMIN_SUPERVISOR, (fecha) => reportsService.generarReporteDiario(fecha));
-  protegido('reports:mensual', ADMIN_SUPERVISOR, (datos) => reportsService.generarReporteMensual(datos));
-  protegido('reports:inventario', ADMIN_SUPERVISOR, () => reportsService.generarReporteInventario());
-  protegido('reports:abrir', ADMIN_SUPERVISOR, (ruta) => abrirReporte(ruta));
+  // ── Reportes y documentos ──────────────────────
+  protegido('reports:diario', ADMIN_SUPERVISOR, (fecha, u) => reportsService.generarReporteDiario(fecha, u));
+  protegido('reports:mensual', ADMIN_SUPERVISOR, (datos, u) => reportsService.generarReporteMensual(datos, u));
+  protegido('reports:inventario', ADMIN_SUPERVISOR, (_d, u) => reportsService.generarReporteInventario(u));
+  protegido('reports:ventas', ADMIN_SUPERVISOR, (filtros, u) => reportsService.generarReporteVentas(filtros, u));
+  protegido('reports:dgii', SOLO_ADMIN, (datos) => reportsService.exportarDgii(datos));
+  protegido('reports:factura', GESTION, (ventaId, u) => reportsService.generarFactura(ventaId, u));
+  protegido('reports:cierre', GESTION, (cierreId, u) => reportsService.generarCierre(cierreId, u));
+  protegido('reports:abrir', GESTION, (ruta) => abrirDocumento(ruta));
 
   // ── Admin ──────────────────────────────────────
   protegido('admin:usuarios', SOLO_ADMIN, () => adminService.listarUsuarios());

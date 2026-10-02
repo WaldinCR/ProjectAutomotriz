@@ -62,6 +62,7 @@ async function crearProducto(datos, actor) {
         precioVenta: dinero(data.precioVenta),
         stock: data.stock,
         stockMinimo: data.stockMinimo,
+        exentoItbis: data.exentoItbis,
       },
     });
 

@@ -3,7 +3,7 @@
 // estos leen process.env (DATABASE_URL, JWT_SECRET) al cargarse.
 require('./core/env').cargarEnv();
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const schedule = require('node-schedule');
@@ -12,6 +12,7 @@ const { startServer } = require('./server');
 const { realizarBackup, backupSiCorresponde } = require('./backup/backup.service');
 const sesiones = require('./core/session');
 const prisma = require('./core/prisma');
+const { migrar } = require('./core/migrator');
 
 const DEV_URL = 'http://localhost:5173';
 // `npm run dev` pasa --dev: siempre usa Vite aunque exista un dist/ antiguo
@@ -51,7 +52,25 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // 0. Actualizar la base de datos (con respaldo previo) antes de atenderla
+  try {
+    await migrar({
+      antesDeMigrar: async (pendientes) => {
+        console.log('[Migraciones] Pendientes:', pendientes.join(', '));
+        const r = await realizarBackup();
+        if (!r.success) throw new Error(`No se pudo respaldar la base antes de migrar: ${r.error}`);
+      },
+    });
+  } catch (error) {
+    dialog.showErrorBox('No se pudo actualizar la base de datos',
+      `${error.message}
+
+La base de datos no fue modificada. Contacte al soporte técnico.`);
+    app.quit();
+    return;
+  }
+
   // 1. Registrar manejadores IPC
   registerIpcHandlers();
 

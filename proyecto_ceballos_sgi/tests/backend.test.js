@@ -17,6 +17,7 @@ const backup = require('../src/main/backup/backup.service');
 const { createApp } = require('../src/main/server');
 const { normalizarError } = require('../src/main/core/errors');
 const { fechaLocalISO } = require('../src/main/core/dates');
+const { migrar } = require('../src/main/core/migrator');
 
 let ADMIN, CAJERO, SUPERVISOR;
 
@@ -40,9 +41,12 @@ async function rechaza(promesa, regex) {
 }
 
 before(async () => {
-  for (const t of ['auditLog', 'movimientoInventario', 'detalleVenta', 'detalleOrden', 'ordenTrabajo', 'venta', 'cierreCaja', 'producto', 'usuario']) {
+  await migrar();
+  for (const t of ['auditLog', 'movimientoInventario', 'detalleVenta', 'detalleOrden', 'ordenTrabajo', 'venta', 'cierreCaja', 'producto', 'usuario', 'secuenciaNcf']) {
     await prisma[t].deleteMany();
   }
+  await prisma.configuracion.deleteMany();
+  await prisma.configuracion.create({ data: { id: 1 } });
   ADMIN = await crearUsuarioDirecto('admin', 'ADMINISTRADOR');
   CAJERO = await crearUsuarioDirecto('cajero', 'CAJERO');
   SUPERVISOR = await crearUsuarioDirecto('super', 'SUPERVISOR');
@@ -269,15 +273,21 @@ test('no se pueden anular ventas ya incluidas en un cierre', async () => {
 });
 
 // ── Reportes y respaldo ──────────────────────────
-test('los reportes PDF se generan', async () => {
+test('los reportes y documentos PDF se generan', async () => {
   const hoy = new Date();
+  const venta = await prisma.venta.findFirst();
+  const cierre = await prisma.cierreCaja.findFirst();
   const rutas = [
-    await reportes.generarReporteDiario(fechaLocalISO(hoy)),
-    await reportes.generarReporteMensual({ mes: hoy.getMonth() + 1, anio: hoy.getFullYear() }),
-    await reportes.generarReporteInventario(),
+    await reportes.generarReporteDiario(fechaLocalISO(hoy), ADMIN),
+    await reportes.generarReporteMensual({ mes: hoy.getMonth() + 1, anio: hoy.getFullYear() }, ADMIN),
+    await reportes.generarReporteInventario(ADMIN),
+    await reportes.generarReporteVentas({ desde: fechaLocalISO(hoy), hasta: fechaLocalISO(hoy), usuarioId: CAJERO.id }, ADMIN),
+    await reportes.generarFactura(venta.id, ADMIN),
+    await reportes.generarCierre(cierre.id, ADMIN),
   ];
   for (const r of rutas) assert.ok(fs.statSync(r).size > 1000, r);
   await rechaza(reportes.generarReporteDiario('2026-13-45'), /fecha/);
+  await rechaza(reportes.generarReporteVentas({ desde: '2026-05-02', hasta: '2026-05-01' }), /posterior/);
 });
 
 test('el respaldo crea una copia válida de la base', async () => {

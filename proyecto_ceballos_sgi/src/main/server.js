@@ -4,6 +4,9 @@
 // hacerse a través de un túnel cifrado (WireGuard, SSH, Cloudflare Tunnel...)
 // según RNF-07; nunca exponiendo este puerto HTTP directamente a la red.
 // Para escuchar en otra interfaz defina REMOTE_API_HOST en .env.
+const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const express = require('express');
 const prisma = require('./core/prisma');
 const authService = require('./auth/auth.service');
@@ -98,6 +101,7 @@ function createApp() {
     };
   }));
 
+  app.get('/api/health', (req, res) => res.json({ ok: true, servicio: 'SGI Automotriz', hora: new Date() }));
   app.get('/api/cashier/resumen', authenticateJWT, ruta(() => cashierService.resumenTurno()));
   app.get('/api/inventory/listar', authenticateJWT, ruta(() => inventoryService.listarProductos()));
   app.get('/api/inventory/stock-bajo', authenticateJWT, ruta(() => inventoryService.productosStockBajo()));
@@ -106,12 +110,26 @@ function createApp() {
   return app;
 }
 
+// RNF-07: si se configuran certificado y llave, la API se sirve por HTTPS
+function opcionesTls() {
+  const cert = process.env.REMOTE_API_TLS_CERT;
+  const key = process.env.REMOTE_API_TLS_KEY;
+  if (!cert || !key) return null;
+  return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
+}
+
 function startServer(port = 3000, host = '127.0.0.1') {
-  const server = createApp().listen(port, host, () => {
-    console.log(`[Express] API de supervisión activa en http://${host}:${port}`);
+  const tls = opcionesTls();
+  const app = createApp();
+  const local = ['127.0.0.1', 'localhost', '::1'].includes(host);
+  if (!tls && !local) {
+    console.warn('[Express] ADVERTENCIA: API expuesta en la red sin TLS. Configure REMOTE_API_TLS_CERT/KEY o use un túnel cifrado.');
+  }
+  const server = (tls ? https.createServer(tls, app) : http.createServer(app)).listen(port, host, () => {
+    console.log(`[Express] API de supervisión activa en ${tls ? 'https' : 'http'}://${host}:${port}`);
   });
   server.on('error', (err) => console.error('[Express] No se pudo iniciar la API remota:', err.message));
   return server;
 }
 
-module.exports = { startServer, createApp };
+module.exports = { startServer, createApp, opcionesTls };

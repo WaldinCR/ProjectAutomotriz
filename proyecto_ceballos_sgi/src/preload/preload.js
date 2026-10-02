@@ -15,12 +15,24 @@ contextBridge.exposeInMainWorld('api', {
     sesion: invoke('auth:sesion'),
   },
 
+  // ── Configuración e impresora ──────────────────
+  config: {
+    obtener:          invoke('config:obtener'),
+    actualizar:       invoke('config:actualizar'),
+    secuencias:       invoke('config:secuencias'),
+    guardarSecuencia: invoke('config:guardarSecuencia'),
+    imprimirPrueba:   invoke('printer:prueba'),
+    imprimirVenta:    invoke('printer:venta'),
+  },
+
   // ── Punto de Venta (POS) ───────────────────────
   pos: {
     buscarProducto: invoke('pos:buscarProducto'),
+    calcular:       invoke('pos:calcular'),
     confirmarVenta: invoke('pos:confirmarVenta'),
     anularVenta:    invoke('pos:anularVenta'),
     listarVentas:   invoke('pos:listarVentas'),
+    obtenerVenta:   invoke('pos:obtenerVenta'),
   },
 
   // ── Inventario ─────────────────────────────────
@@ -39,6 +51,10 @@ contextBridge.exposeInMainWorld('api', {
   workshop: {
     crearOrden:    invoke('workshop:crear'),
     listarOrdenes: invoke('workshop:listar'),
+    tecnicos:      invoke('workshop:tecnicos'),
+    asignar:       invoke('workshop:asignar'),
+    agregarItem:   invoke('workshop:agregarItem'),
+    quitarItem:    invoke('workshop:quitarItem'),
     cambiarEstado: invoke('workshop:estado'),
     facturarOrden: invoke('workshop:facturar'),
   },
@@ -50,11 +66,15 @@ contextBridge.exposeInMainWorld('api', {
     historial:       invoke('cashier:historial'),
   },
 
-  // ── Reportes ───────────────────────────────────
+  // ── Reportes y documentos ──────────────────────
   reports: {
     diario:     invoke('reports:diario'),
     mensual:    invoke('reports:mensual'),
     inventario: invoke('reports:inventario'),
+    ventas:     invoke('reports:ventas'),
+    dgii:       invoke('reports:dgii'),
+    factura:    invoke('reports:factura'),
+    cierre:     invoke('reports:cierre'),
     abrir:      invoke('reports:abrir'),
   },
 
