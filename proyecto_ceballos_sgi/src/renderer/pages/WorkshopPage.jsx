@@ -1,296 +1,367 @@
 import { useState, useEffect } from 'react';
 import PageLayout from '../components/PageLayout';
+import Modal from '../components/Modal';
 import Alert from '../components/Alert';
-import { listarOrdenes, crearOrden, cambiarEstado } from '../services/workshopService';
+import Spinner from '../components/Spinner';
+import { crearOrden, listarOrdenes, cambiarEstado } from '../services/workshopService';
+import { listarProductos } from '../services/inventoryService';
 import { useAuthStore } from '../store/authStore';
 
-const DEFAULT_ORDERS = [
-  { id: 'OT-284', vehiculo: 'Toyota Hilux 2018', cliente: 'José Martínez', telefono: '809-555-1820', estado: 'EN_PROCESO', total: 8450, fecha: '01 oct. 2026' },
-  { id: 'OT-283', vehiculo: 'Kia Sportage 2020', cliente: 'Ana Ramírez', telefono: '809-555-4916', estado: 'COMPLETADA', total: 12600, fecha: '01 oct. 2026' },
-  { id: 'OT-282', vehiculo: 'Honda Civic 2015', cliente: 'Carlos Peña', telefono: '809-555-7721', estado: 'FACTURADA', total: 5350, fecha: '30 sep. 2026' },
-];
+const ESTADOS = ['PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'FACTURADA'];
+const EMPTY = { vehiculo: '', cliente: '', telefono: '', descripcion: '' };
 
 export default function WorkshopPage() {
   const { user } = useAuthStore();
   const [ordenes, setOrdenes] = useState([]);
-  const [search, setSearch] = useState('');
-  const [estadoFiltro, setEstadoFiltro] = useState('');
+  const [productos, setProductos] = useState([]);
+  const [filtro, setFiltro] = useState('');
+  const [loading, setLoading] = useState(true);
   const [alerta, setAlerta] = useState(null);
   const [modalNueva, setModalNueva] = useState(false);
-  const [form, setForm] = useState({
-    vehiculo: '',
-    cliente: '',
-    telefono: '',
-    total: '',
-    estado: 'EN_PROCESO',
-  });
+  const [form, setForm] = useState(EMPTY);
+  const [errors, setErrors] = useState({});
+  const [items, setItems] = useState([{ servicio: '', productoId: '', cantidad: 1, precioUnitario: '', subtotal: 0 }]);
 
-  useEffect(() => {
-    cargarOrdenes();
-  }, []);
+  useEffect(() => { cargar(); }, []);
 
-  async function cargarOrdenes() {
+  async function cargar() {
+    setLoading(true);
     try {
-      if (window.api?.workshop?.listarOrdenes) {
-        const res = await listarOrdenes();
-        if (res && res.length > 0) {
-          setOrdenes(res.map(o => ({
-            id: `OT-${o.id}`,
-            realId: o.id,
-            vehiculo: o.vehiculo,
-            cliente: o.cliente,
-            telefono: o.telefono || '—',
-            estado: o.estado,
-            total: o.total || 0,
-            fecha: new Date(o.createdAt).toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' }),
-          })));
-          return;
+      const [ords, prods] = await Promise.all([listarOrdenes(), listarProductos()]);
+      setOrdenes(ords || []);
+      setProductos(prods || []);
+    } catch {
+      setAlerta({ type: 'error', msg: 'Error al cargar órdenes de trabajo' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateItem(i, field, value) {
+    setItems(prev => prev.map((it, idx) => {
+      if (idx !== i) return it;
+      const u = { ...it, [field]: value };
+      if (field === 'productoId' && value) {
+        const p = productos.find(prod => prod.id === parseInt(value));
+        if (p) {
+          u.precioUnitario = p.precioVenta;
+          u.servicio = p.nombre;
+          u.subtotal = p.precioVenta * (parseInt(u.cantidad) || 1);
         }
       }
-      setOrdenes(DEFAULT_ORDERS);
-    } catch {
-      setOrdenes(DEFAULT_ORDERS);
-    }
+      if (field === 'cantidad' || field === 'precioUnitario') {
+        u.subtotal = (parseFloat(u.precioUnitario) || 0) * (parseInt(u.cantidad) || 1);
+      }
+      return u;
+    }));
   }
 
-  function formatMoney(amount) {
-    return 'RD$ ' + Number(amount || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
+  async function handleCrear() {
+    const newErrors = {};
+    if (!form.vehiculo || !form.vehiculo.trim()) newErrors.vehiculo = 'El vehículo es requerido';
+    if (!form.cliente || !form.cliente.trim()) newErrors.cliente = 'El cliente es requerido';
 
-  function getStatusBadge(estado) {
-    if (estado === 'EN_PROCESO' || estado === 'En proceso') {
-      return <span className="status process">En proceso</span>;
-    }
-    if (estado === 'COMPLETADA' || estado === 'Listo') {
-      return <span className="status ready">Listo</span>;
-    }
-    return <span className="status closed">Cerrada</span>;
-  }
-
-  async function handleCrearOrden(e) {
-    e.preventDefault();
-    if (!form.vehiculo || !form.cliente) {
-      setAlerta({ type: 'warning', message: 'Completa los campos obligatorios.' });
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
       return;
     }
 
     try {
-      if (window.api?.workshop?.crearOrden) {
-        await crearOrden({
-          vehiculo: form.vehiculo,
-          cliente: form.cliente,
-          telefono: form.telefono,
-          descripcion: 'Servicio registrado desde vista rápida',
-          usuarioId: user?.id,
-          items: [{
-            servicio: 'Servicio general',
-            cantidad: 1,
-            precioUnitario: parseFloat(form.total) || 0,
-            subtotal: parseFloat(form.total) || 0,
-          }],
-        });
-      }
-      const nueva = {
-        id: `OT-${Math.floor(285 + Math.random() * 50)}`,
-        vehiculo: form.vehiculo,
-        cliente: form.cliente,
-        telefono: form.telefono || '—',
-        estado: form.estado,
-        total: parseFloat(form.total) || 0,
-        fecha: new Date().toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' }),
-      };
-      setOrdenes(prev => [nueva, ...prev]);
+      await crearOrden({
+        ...form,
+        usuarioId: user.id,
+        items: items.map(i => ({
+          ...i,
+          productoId: i.productoId ? parseInt(i.productoId) : null,
+          cantidad: parseInt(i.cantidad) || 1,
+          precioUnitario: parseFloat(i.precioUnitario) || 0,
+        }))
+      });
+      setAlerta({ type: 'success', msg: 'Orden de trabajo creada' });
       setModalNueva(false);
-      setForm({ vehiculo: '', cliente: '', telefono: '', total: '', estado: 'EN_PROCESO' });
-      setAlerta({ type: 'success', message: 'Orden de trabajo creada exitosamente.' });
-    } catch (err) {
-      setAlerta({ type: 'error', message: err.message || 'Error al crear la orden.' });
+      setForm(EMPTY);
+      setErrors({});
+      setItems([{ servicio: '', productoId: '', cantidad: 1, precioUnitario: '', subtotal: 0 }]);
+      cargar();
+    } catch (e) {
+      setAlerta({ type: 'error', msg: e.message });
     }
   }
 
-  const ordenesFiltradas = ordenes.filter(o => {
-    const q = search.toLowerCase();
-    const matchSearch =
-      (o.vehiculo || '').toLowerCase().includes(q) ||
-      (o.cliente || '').toLowerCase().includes(q) ||
-      (o.telefono || '').toLowerCase().includes(q) ||
-      (o.id || '').toLowerCase().includes(q);
+  async function handleEstado(ordenId, estado) {
+    try {
+      await cambiarEstado({ ordenId, estado, usuarioId: user.id });
+      cargar();
+    } catch (e) {
+      setAlerta({ type: 'error', msg: e.message });
+    }
+  }
 
-    if (!matchSearch) return false;
-    if (!estadoFiltro) return true;
-    if (estadoFiltro === 'En proceso') return o.estado === 'EN_PROCESO' || o.estado === 'En proceso';
-    if (estadoFiltro === 'Listo') return o.estado === 'COMPLETADA' || o.estado === 'Listo';
-    if (estadoFiltro === 'Cerrada') return o.estado === 'FACTURADA' || o.estado === 'Cerrada';
-    return true;
-  });
+  const ordenesFiltradas = ordenes.filter(o =>
+    (o.vehiculo || '').toLowerCase().includes(filtro.toLowerCase()) ||
+    (o.cliente || '').toLowerCase().includes(filtro.toLowerCase()) ||
+    String(o.id).includes(filtro)
+  );
+
+  const totalFacturado = ordenes
+    .filter(o => o.estado === 'FACTURADA')
+    .reduce((sum, o) => sum + (o.total || 0), 0);
+  const facturadasCount = ordenes.filter(o => o.estado === 'FACTURADA').length;
+  const pendientesCount = ordenes.filter(o => o.estado === 'PENDIENTE').length;
+
+  function getBadgeClass(estado) {
+    switch (estado) {
+      case 'FACTURADA': return 'bg-green';
+      case 'COMPLETADA': return 'bg-purple';
+      case 'EN_PROCESO': return 'bg-blue';
+      default: return 'bg-yellow';
+    }
+  }
 
   return (
     <PageLayout
-      title="Órdenes de Trabajo"
-      subtitle="Seguimiento operativo de servicios, diagnósticos y reparaciones."
+      title="Órdenes de trabajo"
+      subtitle="Gestión y seguimiento de servicios del taller"
+      icon="ti-tool"
       actions={
-        <button
-          className="primary-btn"
-          type="button"
-          onClick={() => setModalNueva(true)}
-        >
-          <i className="ti ti-plus"></i> Nueva orden
+        <button className="btn btn-dark" onClick={() => setModalNueva(true)}>
+          <i className="ti ti-plus"></i>Nueva OT
         </button>
       }
     >
       {alerta && (
-        <div style={{ marginBottom: '16px' }}>
-          <Alert type={alerta.type} message={alerta.message} onClose={() => setAlerta(null)} />
+        <div style={{ marginBottom: '14px' }}>
+          <Alert type={alerta.type} message={alerta.msg} onClose={() => setAlerta(null)} />
         </div>
       )}
 
-      {/* Filtros */}
-      <div className="filters">
-        <div className="search-box">
-          <i className="ti ti-search"></i>
-          <input
-            type="search"
-            placeholder="Buscar cliente, vehículo o teléfono"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+      {/* Stats row */}
+      <div className="stats-row">
+        <div className="stat-card">
+          <div className="stat-icon-wrap" style={{ background: '#dbeafe' }}>
+            <i className="ti ti-clipboard-list" style={{ color: '#1e40af' }}></i>
+          </div>
+          <div className="stat-val">{ordenes.length}</div>
+          <div className="stat-label">Órdenes totales</div>
+          <div className="stat-bar" style={{ background: '#bfdbfe' }}></div>
         </div>
-        <select
-          className="select-control"
-          value={estadoFiltro}
-          onChange={e => setEstadoFiltro(e.target.value)}
-        >
-          <option value="">Todos los estados</option>
-          <option value="En proceso">En proceso</option>
-          <option value="Listo">Listo</option>
-          <option value="Cerrada">Cerrada</option>
-        </select>
+
+        <div className="stat-card">
+          <div className="stat-icon-wrap" style={{ background: '#dcfce7' }}>
+            <i className="ti ti-circle-check" style={{ color: '#166534' }}></i>
+          </div>
+          <div className="stat-val">{facturadasCount}</div>
+          <div className="stat-label">Facturadas</div>
+          <div className="stat-bar" style={{ background: '#86efac' }}></div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon-wrap" style={{ background: '#fef9c3' }}>
+            <i className="ti ti-clock" style={{ color: '#854d0e' }}></i>
+          </div>
+          <div className="stat-val">{pendientesCount}</div>
+          <div className="stat-label">Pendientes</div>
+          <div className="stat-bar" style={{ background: '#fde047' }}></div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon-wrap" style={{ background: '#ede9fe' }}>
+            <i className="ti ti-currency-dollar" style={{ color: '#5b21b6' }}></i>
+          </div>
+          <div className="stat-val" style={{ fontSize: '18px' }}>RD$ {totalFacturado.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</div>
+          <div className="stat-label">Total facturado</div>
+          <div className="stat-bar" style={{ background: '#c4b5fd' }}></div>
+        </div>
       </div>
 
-      {/* Tabla */}
-      <div className="card table-card">
-        <div className="table-wrap">
+      {/* Search row */}
+      <div className="search-row">
+        <i className="ti ti-search"></i>
+        <input
+          type="text"
+          placeholder="Buscar por vehículo, cliente o número de OT..."
+          value={filtro}
+          onChange={e => setFiltro(e.target.value)}
+        />
+        <i className="ti ti-calendar" style={{ color: '#94a3b8' }}></i>
+      </div>
+
+      {/* Table */}
+      <div className="tbl-wrap">
+        {loading ? (
+          <div style={{ padding: '40px', textAlign: 'center' }}>
+            <Spinner />
+          </div>
+        ) : (
           <table>
             <thead>
               <tr>
-                <th>OT</th>
+                <th>#</th>
                 <th>Vehículo</th>
                 <th>Cliente</th>
                 <th>Teléfono</th>
                 <th>Estado</th>
                 <th>Total</th>
                 <th>Fecha</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {ordenesFiltradas.map(o => (
-                <tr key={o.id}>
-                  <td style={{ fontWeight: 700, color: 'var(--blue)' }}>{o.id}</td>
-                  <td>{o.vehiculo}</td>
-                  <td>{o.cliente}</td>
-                  <td>{o.telefono}</td>
-                  <td>{getStatusBadge(o.estado)}</td>
-                  <td style={{ fontWeight: 700 }}>{formatMoney(o.total)}</td>
-                  <td>{o.fecha}</td>
-                </tr>
-              ))}
-              {ordenesFiltradas.length === 0 && (
+              {ordenesFiltradas.length === 0 ? (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--muted)' }}>
-                    No se encontraron órdenes de trabajo.
+                  <td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                    No se encontraron órdenes de trabajo
                   </td>
                 </tr>
+              ) : (
+                ordenesFiltradas.map(o => {
+                  const proxIdx = ESTADOS.indexOf(o.estado) + 1;
+                  const puedeAvanzar = proxIdx < ESTADOS.length;
+                  return (
+                    <tr key={o.id}>
+                      <td className="td-accent">#{o.id}</td>
+                      <td>{o.vehiculo}</td>
+                      <td>{o.cliente}</td>
+                      <td style={{ color: '#64748b' }}>{o.telefono || '—'}</td>
+                      <td>
+                        <span className={`badge ${getBadgeClass(o.estado)}`}>
+                          {o.estado}
+                        </span>
+                      </td>
+                      <td className="td-bold">RD$ {o.total.toFixed(2)}</td>
+                      <td style={{ color: '#64748b' }}>
+                        {new Date(o.fechaCreacion).toLocaleDateString('es-DO')}
+                      </td>
+                      <td>
+                        {puedeAvanzar && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => handleEstado(o.id, ESTADOS[proxIdx])}
+                          >
+                            <i className="ti ti-arrow-right" style={{ fontSize: '13px' }}></i>
+                            {ESTADOS[proxIdx]}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
-        </div>
+        )}
       </div>
 
-      {/* Modal Nueva Orden */}
-      {modalNueva && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <form className="modal-dialog" onSubmit={handleCrearOrden}>
-            <div className="modal-head">
-              <h2>Nueva orden de trabajo</h2>
-              <button
-                className="icon-btn"
-                type="button"
-                onClick={() => setModalNueva(false)}
-                title="Cerrar"
-              >
-                <i className="ti ti-x"></i>
-              </button>
+      {/* Modal Nueva OT */}
+      <Modal open={modalNueva} title="Nueva Orden de Trabajo" onClose={() => { setModalNueva(false); setErrors({}); }} size="xl">
+        <div style={{ padding: '8px 0' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
+            <div>
+              <label className="lbl">Vehículo (ej: Toyota Corolla 2018)</label>
+              <input
+                className="inp"
+                value={form.vehiculo}
+                onChange={e => { setForm({ ...form, vehiculo: e.target.value }); setErrors({ ...errors, vehiculo: '' }); }}
+              />
+              {errors.vehiculo && <span style={{ color: '#dc2626', fontSize: '11px' }}>{errors.vehiculo}</span>}
             </div>
-            <div className="modal-grid">
+            <div>
+              <label className="lbl">Cliente</label>
+              <input
+                className="inp"
+                value={form.cliente}
+                onChange={e => { setForm({ ...form, cliente: e.target.value }); setErrors({ ...errors, cliente: '' }); }}
+              />
+              {errors.cliente && <span style={{ color: '#dc2626', fontSize: '11px' }}>{errors.cliente}</span>}
+            </div>
+            <div>
+              <label className="lbl">Teléfono</label>
+              <input
+                className="inp"
+                value={form.telefono}
+                onChange={e => setForm({ ...form, telefono: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="lbl">Descripción del problema</label>
+              <input
+                className="inp"
+                value={form.descripcion}
+                onChange={e => setForm({ ...form, descripcion: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '10px' }}>
+            Servicios y Repuestos
+          </div>
+
+          {items.map((item, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 1fr 1fr', gap: '10px', marginBottom: '10px', alignItems: 'end' }}>
               <div>
-                <label htmlFor="ot-vehicle">Vehículo</label>
+                <label className="lbl">Servicio</label>
                 <input
-                  id="ot-vehicle"
-                  required
-                  placeholder="Ej. Toyota Corolla 2016"
-                  value={form.vehiculo}
-                  onChange={e => setForm({ ...form, vehiculo: e.target.value })}
+                  className="inp"
+                  value={item.servicio}
+                  placeholder="Descripción del servicio"
+                  onChange={e => updateItem(i, 'servicio', e.target.value)}
                 />
               </div>
               <div>
-                <label htmlFor="ot-client">Cliente</label>
-                <input
-                  id="ot-client"
-                  required
-                  placeholder="Nombre completo"
-                  value={form.cliente}
-                  onChange={e => setForm({ ...form, cliente: e.target.value })}
-                />
-              </div>
-              <div>
-                <label htmlFor="ot-phone">Teléfono</label>
-                <input
-                  id="ot-phone"
-                  required
-                  placeholder="809-000-0000"
-                  value={form.telefono}
-                  onChange={e => setForm({ ...form, telefono: e.target.value })}
-                />
-              </div>
-              <div>
-                <label htmlFor="ot-total">Total estimado</label>
-                <input
-                  id="ot-total"
-                  type="number"
-                  min="0"
-                  required
-                  placeholder="0.00"
-                  value={form.total}
-                  onChange={e => setForm({ ...form, total: e.target.value })}
-                />
-              </div>
-              <div className="full">
-                <label htmlFor="ot-status">Estado inicial</label>
+                <label className="lbl">Repuesto del inventario</label>
                 <select
-                  id="ot-status"
-                  value={form.estado}
-                  onChange={e => setForm({ ...form, estado: e.target.value })}
+                  className="inp"
+                  value={item.productoId}
+                  onChange={e => updateItem(i, 'productoId', e.target.value)}
                 >
-                  <option value="EN_PROCESO">En proceso</option>
-                  <option value="COMPLETADA">Listo</option>
+                  <option value="">Sin repuesto</option>
+                  {productos.map(p => (
+                    <option key={p.id} value={p.id}>{p.nombre}</option>
+                  ))}
                 </select>
               </div>
+              <div>
+                <label className="lbl">Cant.</label>
+                <input
+                  className="inp"
+                  type="number"
+                  min="1"
+                  value={item.cantidad}
+                  onChange={e => updateItem(i, 'cantidad', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="lbl">Precio (RD$)</label>
+                <input
+                  className="inp"
+                  type="number"
+                  value={item.precioUnitario}
+                  onChange={e => updateItem(i, 'precioUnitario', e.target.value)}
+                />
+              </div>
             </div>
-            <div className="modal-actions">
-              <button
-                className="secondary-btn"
-                type="button"
-                onClick={() => setModalNueva(false)}
-              >
-                Cancelar
-              </button>
-              <button className="primary-btn" type="submit">
-                Crear orden
-              </button>
+          ))}
+
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ marginBottom: '16px' }}
+            onClick={() => setItems([...items, { servicio: '', productoId: '', cantidad: 1, precioUnitario: '', subtotal: 0 }])}
+          >
+            <i className="ti ti-plus"></i>Agregar línea
+          </button>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+            <span style={{ fontSize: '16px', fontWeight: 700, color: '#1e3a5f' }}>
+              Total: RD$ {items.reduce((s, i) => s + (parseFloat(i.subtotal) || 0), 0).toFixed(2)}
+            </span>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button className="btn btn-ghost" onClick={() => setModalNueva(false)}>Cancelar</button>
+              <button className="btn btn-dark" onClick={handleCrear}>Crear Orden</button>
             </div>
-          </form>
+          </div>
         </div>
-      )}
+      </Modal>
     </PageLayout>
   );
 }
