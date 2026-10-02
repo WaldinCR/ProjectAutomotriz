@@ -17,8 +17,11 @@ model Usuario {
   nombre        String
   usuario       String   @unique
   passwordHash  String
-  rol           String   @default("CAJERO")
+  rol           String   @default("CAJERO") // ADMINISTRADOR | CAJERO | SUPERVISOR
   activo        Boolean  @default(true)
+  intentosFallidos Int     @default(0)  // RF-06: bloqueo tras 5 intentos
+  bloqueadoHasta   DateTime?
+  ultimoAcceso     DateTime?           // RF-05
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -54,13 +57,16 @@ model Venta {
   fecha            DateTime    @default(now())
   usuarioId        Int
   usuario          Usuario     @relation(fields: [usuarioId], references: [id])
+  descuento        Float       @default(0) // Descuento global (RF-12)
   total            Float
-  metodoPago       String
-  estado           String      @default("CONFIRMADA")
+  metodoPago       String      // EFECTIVO | TARJETA | TRANSFERENCIA
+  estado           String      @default("CONFIRMADA") // CONFIRMADA | ANULADA
   motivoAnulacion  String?
 
   detalles         DetalleVenta[]
   ordenTrabajo     OrdenTrabajo?
+
+  @@index([fecha])
 }
 
 model DetalleVenta {
@@ -79,12 +85,13 @@ model DetalleVenta {
 model OrdenTrabajo {
   id             Int      @id @default(autoincrement())
   vehiculo       String
+  placa          String?  // RF-29
   cliente        String
   telefono       String?
   descripcion    String?
   usuarioId      Int
   usuario        Usuario  @relation(fields: [usuarioId], references: [id])
-  estado         String   @default("PENDIENTE")
+  estado         String   @default("PENDIENTE") // PENDIENTE | EN_PROCESO | COMPLETADA | FACTURADA | CANCELADA
   total          Float    @default(0)
   fechaCreacion  DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -92,6 +99,8 @@ model OrdenTrabajo {
   venta          Venta?   @relation(fields: [ventaId], references: [id])
 
   detalles       DetalleOrden[]
+
+  @@index([fechaCreacion])
 }
 
 model DetalleOrden {
@@ -112,10 +121,12 @@ model MovimientoInventario {
   producto    Producto       @relation(fields: [productoId], references: [id])
   usuarioId   Int
   usuario     Usuario        @relation(fields: [usuarioId], references: [id])
-  tipo        String
-  cantidad    Int
+  tipo        String         // ENTRADA | SALIDA | AJUSTE
+  cantidad    Int            // Positivo suma stock, negativo lo resta (solo AJUSTE)
   motivo      String
   fecha       DateTime       @default(now())
+
+  @@index([productoId, fecha])
 }
 
 model CierreCaja {
@@ -129,6 +140,8 @@ model CierreCaja {
   diferencia        Float
   observaciones     String?
   confirmado        Boolean  @default(false)
+
+  @@index([fecha])
 }
 
 model AuditLog {
@@ -142,4 +155,6 @@ model AuditLog {
   datosNuevos      String?
   ipAddress        String?
   fecha            DateTime @default(now())
+
+  @@index([fecha])
 }

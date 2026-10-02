@@ -6,7 +6,10 @@
   "scripts": {
     "start": "electron .",
     "dev": "concurrently \"vite src/renderer\" \"wait-on http-get://localhost:5173 && electron .\"",
-    "build": "vite build src/renderer && electron-builder"
+    "build": "vite build src/renderer && electron-builder",
+    "test": "node tests/run-tests.js",
+    "db:push": "prisma db push",
+    "db:seed": "node prisma/seed.js"
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",

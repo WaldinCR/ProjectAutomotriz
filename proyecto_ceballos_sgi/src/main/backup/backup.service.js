@@ -1,68 +1,69 @@
-// Servicio de Backup de SQLite
+// Servicio de Backup de SQLite (RNF-08, RNF-13)
+// Usa VACUUM INTO: genera una copia consistente aunque la base esté en uso,
+// a diferencia de copiar el archivo, que puede capturar escrituras a medias.
 const fs = require('fs');
 const path = require('path');
+const prisma = require('../core/prisma');
+const { ROOT_DIR } = require('../core/env');
 
-function realizarBackup() {
+const RETENCION_MS = 30 * 24 * 60 * 60 * 1000; // 30 días
+const PATRON = /^backup_\d{8}_\d{6}\.db$/;
+
+function carpetaBackups() {
+  if (process.env.BACKUP_DIR) return path.resolve(process.env.BACKUP_DIR);
   try {
-    const projectRoot = process.cwd();
-    let dbPath = path.join(projectRoot, 'prisma', 'sgi_database.db');
-    
-    // Si no existe en prisma/sgi_database.db, buscar en prisma/prisma/sgi_database.db
-    if (!fs.existsSync(dbPath)) {
-      dbPath = path.join(projectRoot, 'prisma', 'prisma', 'sgi_database.db');
-    }
-    
-    const backupDir = path.join(projectRoot, 'backups');
+    const { app } = require('electron');
+    // En la app empaquetada el código está en un .asar de solo lectura
+    if (app?.isPackaged) return path.join(app.getPath('userData'), 'backups');
+  } catch { /* Fuera de Electron (pruebas/scripts) */ }
+  return path.join(ROOT_DIR, 'backups');
+}
 
-    // 1. Crear carpeta backups si no existe
-    if (!fs.existsSync(backupDir)) {
-      fs.mkdirSync(backupDir, { recursive: true });
-    }
+function marcaDeTiempo(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
 
-    // 2. Generar nombre de archivo con marca de tiempo local
-    const ahora = new Date();
-    const anio = ahora.getFullYear();
-    const mes = String(ahora.getMonth() + 1).padStart(2, '0');
-    const dia = String(ahora.getDate()).padStart(2, '0');
-    const horas = String(ahora.getHours()).padStart(2, '0');
-    const mins = String(ahora.getMinutes()).padStart(2, '0');
-    const secs = String(ahora.getSeconds()).padStart(2, '0');
-    const timestamp = `${anio}${mes}${dia}_${horas}${mins}${secs}`;
+function listarBackups(dir = carpetaBackups()) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => PATRON.test(f))
+    .map(f => ({ archivo: f, ruta: path.join(dir, f), fecha: fs.statSync(path.join(dir, f)).mtime }))
+    .sort((a, b) => b.fecha - a.fecha);
+}
 
-    const backupFile = `backup_${timestamp}.db`;
-    const destPath = path.join(backupDir, backupFile);
+async function realizarBackup() {
+  try {
+    const dir = carpetaBackups();
+    fs.mkdirSync(dir, { recursive: true });
 
-    // 3. Copiar archivo de base de datos
-    if (fs.existsSync(dbPath)) {
-      fs.copyFileSync(dbPath, destPath);
-      console.log(`[Backup] Base de datos respaldada con éxito en: ${destPath}`);
-    } else {
-      console.warn(`[Backup] No se pudo encontrar el archivo origen en ${dbPath}`);
-      return { success: false, error: 'Database file not found' };
-    }
+    const archivo = `backup_${marcaDeTiempo()}.db`;
+    const destino = path.join(dir, archivo);
+    // La ruta la genera el sistema; se escapan comillas por seguridad
+    await prisma.$executeRawUnsafe(`VACUUM INTO '${destino.replace(/'/g, "''")}'`);
+    console.log(`[Backup] Base de datos respaldada en: ${destino}`);
 
-    // 4. Depurar copias con antigüedad mayor a 30 días
-    const archivos = fs.readdirSync(backupDir);
-    const limite30Dias = 30 * 24 * 60 * 60 * 1000; // 30 días en ms
-
-    archivos.forEach(archivo => {
-      if (archivo.startsWith('backup_') && archivo.endsWith('.db')) {
-        const filePath = path.join(backupDir, archivo);
-        const stats = fs.statSync(filePath);
-        const antiguedad = ahora.getTime() - stats.mtime.getTime();
-
-        if (antiguedad > limite30Dias) {
-          fs.unlinkSync(filePath);
-          console.log(`[Backup] Copia obsoleta eliminada: ${archivo}`);
-        }
+    const ahora = Date.now();
+    for (const b of listarBackups(dir)) {
+      if (ahora - b.fecha.getTime() > RETENCION_MS) {
+        fs.unlinkSync(b.ruta);
+        console.log(`[Backup] Copia obsoleta eliminada: ${b.archivo}`);
       }
-    });
-
-    return { success: true, file: backupFile };
+    }
+    return { success: true, file: archivo, path: destino };
   } catch (error) {
-    console.error('[Backup] Error durante el proceso de copia de seguridad:', error);
+    console.error('[Backup] Error durante la copia de seguridad:', error);
     return { success: false, error: error.message };
   }
 }
 
-module.exports = { realizarBackup };
+// Si el equipo estuvo apagado a la hora programada, respalda al iniciar
+async function backupSiCorresponde() {
+  const ultimo = listarBackups()[0];
+  if (!ultimo || Date.now() - ultimo.fecha.getTime() > 24 * 60 * 60 * 1000) {
+    return realizarBackup();
+  }
+  return { success: true, skipped: true };
+}
+
+module.exports = { realizarBackup, backupSiCorresponde, listarBackups, carpetaBackups };

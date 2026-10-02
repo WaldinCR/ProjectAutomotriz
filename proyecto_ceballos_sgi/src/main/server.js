@@ -1,160 +1,117 @@
-// Servidor Express local para Supervisor Remoto
+// Servidor Express local para Supervisor Remoto (solo lectura)
+//
+// SEGURIDAD: por defecto escucha solo en 127.0.0.1. El acceso remoto debe
+// hacerse a través de un túnel cifrado (WireGuard, SSH, Cloudflare Tunnel...)
+// según RNF-07; nunca exponiendo este puerto HTTP directamente a la red.
+// Para escuchar en otra interfaz defina REMOTE_API_HOST en .env.
 const express = require('express');
-const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('./core/prisma');
 const authService = require('./auth/auth.service');
 const cashierService = require('./cashier/cashier.service');
 const inventoryService = require('./inventory/inventory.service');
+const schemas = require('./core/validation');
+const { normalizarError, AppError } = require('./core/errors');
+const { ADMIN_SUPERVISOR } = require('./core/roles');
+const { rangoDia, rangoMes, dinero } = require('./core/dates');
 
-const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET || 'clave_por_defecto';
+const ESTADO_HTTP = { VALIDACION: 400, CREDENCIALES: 401, BLOQUEADO: 423, NO_ENCONTRADO: 404, PROHIBIDO: 403 };
 
-function startServer(port = 3000) {
+function createApp() {
   const app = express();
-  app.use(express.json());
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '10kb' }));
+  app.use((req, res, next) => {
+    res.set({ 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
+    next();
+  });
 
-  // Middleware de Autenticación JWT y verificación de Rol
+  // Envuelve un handler async y traduce errores a códigos HTTP sin filtrar detalles internos
+  const ruta = (fn) => async (req, res) => {
+    try {
+      res.json(await fn(req));
+    } catch (error) {
+      const { code, message } = normalizarError(error);
+      res.status(ESTADO_HTTP[code] || 500).json({ error: message });
+    }
+  };
+
   function authenticateJWT(req, res, next) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
+    const [tipo, token] = (req.headers.authorization || '').split(' ');
+    if (tipo !== 'Bearer' || !token) {
       return res.status(401).json({ error: 'Acceso denegado: Token no proporcionado' });
     }
-
-    const token = authHeader.split(' ')[1];
     try {
-      const payload = jwt.verify(token, JWT_SECRET);
-      if (payload.rol !== 'SUPERVISOR' && payload.rol !== 'ADMINISTRADOR') {
+      const payload = authService.verificarToken(token);
+      if (!ADMIN_SUPERVISOR.includes(payload.rol)) {
         return res.status(403).json({ error: 'Acceso denegado: Privilegios insuficientes' });
       }
       req.user = payload;
       next();
-    } catch (error) {
-      return res.status(403).json({ error: 'Token inválido o expirado' });
+    } catch {
+      return res.status(401).json({ error: 'Token inválido o expirado' });
     }
   }
 
-  // Endpoint de autenticación para obtener Token
-  app.post('/api/auth/login', async (req, res) => {
-    try {
-      const { usuario, password } = req.body;
-      if (!usuario || !password) {
-        return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
-      }
-      const data = await authService.login({ usuario, password });
-      res.json(data);
-    } catch (error) {
-      res.status(401).json({ error: error.message });
+  // Login: solo SUPERVISOR y ADMINISTRADOR obtienen token (con bloqueo por intentos, RF-06)
+  app.post('/api/auth/login', ruta(async (req) => {
+    const usuario = await authService.login(req.body);
+    if (!ADMIN_SUPERVISOR.includes(usuario.rol)) {
+      throw new AppError('Acceso remoto no permitido para este rol', 'PROHIBIDO');
     }
+    return { token: authService.emitirToken(usuario), usuario };
+  }));
+
+  app.get('/api/reports/diario', authenticateJWT, ruta(async (req) => {
+    const fecha = schemas.reporteDiario.parse(req.query.fecha);
+    const { inicio, fin } = rangoDia(fecha);
+    const [resumen, ventas] = await Promise.all([
+      cashierService.resumenDia(fecha),
+      prisma.venta.findMany({
+        where: { fecha: { gte: inicio, lt: fin }, estado: 'CONFIRMADA' },
+        select: { numeroFactura: true, fecha: true, total: true, metodoPago: true, usuario: { select: { nombre: true } } },
+        orderBy: { fecha: 'asc' },
+      }),
+    ]);
+    return { fecha, ...resumen, ventasDetail: ventas };
+  }));
+
+  app.get('/api/reports/mensual', authenticateJWT, ruta(async (req) => {
+    const { mes, anio } = schemas.reporteMensual.parse(req.query);
+    const { inicio, fin } = rangoMes(mes, anio);
+    const [ventas, ordenesCompletadas, cierres] = await Promise.all([
+      prisma.venta.findMany({ where: { fecha: { gte: inicio, lt: fin }, estado: 'CONFIRMADA' }, select: { total: true, metodoPago: true } }),
+      prisma.ordenTrabajo.count({ where: { fechaCreacion: { gte: inicio, lt: fin }, estado: { in: ['COMPLETADA', 'FACTURADA'] } } }),
+      prisma.cierreCaja.findMany({
+        where: { fecha: { gte: inicio, lt: fin } },
+        include: { usuario: { select: { nombre: true } } },
+        orderBy: { fecha: 'asc' },
+      }),
+    ]);
+    const resumen = cashierService.resumirVentas(ventas);
+    return {
+      mes, anio,
+      totalVentas: dinero(resumen.totalVentas),
+      porMetodo: resumen.porMetodo,
+      cantidadVentas: resumen.cantidadVentas,
+      ordenesCompletadas,
+      cierres,
+    };
+  }));
+
+  app.get('/api/cashier/resumen', authenticateJWT, ruta(() => cashierService.resumenTurno()));
+  app.get('/api/inventory/listar', authenticateJWT, ruta(() => inventoryService.listarProductos()));
+  app.get('/api/inventory/stock-bajo', authenticateJWT, ruta(() => inventoryService.productosStockBajo()));
+
+  app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+  return app;
+}
+
+function startServer(port = 3000, host = '127.0.0.1') {
+  const server = createApp().listen(port, host, () => {
+    console.log(`[Express] API de supervisión activa en http://${host}:${port}`);
   });
-
-  // Endpoint de solo lectura: Reporte Diario
-  app.get('/api/reports/diario', authenticateJWT, async (req, res) => {
-    try {
-      const { fecha } = req.query; // YYYY-MM-DD
-      if (!fecha) {
-        return res.status(400).json({ error: 'Parámetro de fecha requerido (YYYY-MM-DD)' });
-      }
-
-      const resumen = await cashierService.resumenDia(fecha);
-
-      const targetDate = new Date(fecha);
-      const inicioDia = new Date(targetDate);
-      inicioDia.setUTCHours(0, 0, 0, 0);
-      const finDia = new Date(targetDate);
-      finDia.setUTCHours(23, 59, 59, 999);
-
-      const ventas = await prisma.venta.findMany({
-        where: {
-          fecha: { gte: inicioDia, lte: finDia },
-          estado: 'CONFIRMADA'
-        },
-        include: { usuario: { select: { nombre: true, usuario: true } } }
-      });
-
-      res.json({
-        fecha,
-        ...resumen,
-        ventasDetail: ventas
-      });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Endpoint de solo lectura: Reporte Mensual
-  app.get('/api/reports/mensual', authenticateJWT, async (req, res) => {
-    try {
-      const { mes, anio } = req.query;
-      if (!mes || !anio) {
-        return res.status(400).json({ error: 'Parámetros de mes y año requeridos' });
-      }
-
-      const mesInt = parseInt(mes);
-      const anioInt = parseInt(anio);
-
-      const inicioMes = new Date(Date.utc(anioInt, mesInt - 1, 1, 0, 0, 0, 0));
-      const finMes = new Date(Date.utc(anioInt, mesInt, 0, 23, 59, 59, 999));
-
-      const ventas = await prisma.venta.findMany({
-        where: {
-          fecha: { gte: inicioMes, lte: finMes },
-          estado: 'CONFIRMADA'
-        }
-      });
-      const totalVentas = ventas.reduce((sum, v) => sum + v.total, 0);
-
-      const ordenes = await prisma.ordenTrabajo.findMany({
-        where: {
-          fechaCreacion: { gte: inicioMes, lte: finMes },
-          estado: { in: ['COMPLETADA', 'FACTURADA'] }
-        }
-      });
-
-      const cierres = await prisma.cierreCaja.findMany({
-        where: {
-          fecha: { gte: inicioMes, lte: finMes }
-        },
-        include: { usuario: { select: { nombre: true } } }
-      });
-
-      res.json({
-        mes: mesInt,
-        anio: anioInt,
-        totalVentas,
-        cantidadVentas: ventas.length,
-        ordenesCompletadas: ordenes.length,
-        cierres
-      });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Endpoint de solo lectura: Resumen de Caja actual (hoy)
-  app.get('/api/cashier/resumen', authenticateJWT, async (req, res) => {
-    try {
-      const resumen = await cashierService.resumenDia();
-      res.json(resumen);
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Endpoint de solo lectura: Listado de Productos activos
-  app.get('/api/inventory/listar', authenticateJWT, async (req, res) => {
-    try {
-      const productos = await inventoryService.listarProductos();
-      res.json(productos);
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  const server = app.listen(port, () => {
-    console.log(`[Express] Servidor API REST activo en puerto ${port}`);
-  });
-
+  server.on('error', (err) => console.error('[Express] No se pudo iniciar la API remota:', err.message));
   return server;
 }
 
-module.exports = { startServer };
+module.exports = { startServer, createApp };

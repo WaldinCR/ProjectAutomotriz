@@ -1,0 +1,13 @@
+// Roles del sistema y permisos por acción (SRS 2.3)
+const ROLES = {
+  ADMIN: 'ADMINISTRADOR',
+  CAJERO: 'CAJERO',
+  SUPERVISOR: 'SUPERVISOR',
+};
+
+const TODOS = Object.values(ROLES);
+const OPERADORES = [ROLES.ADMIN, ROLES.CAJERO];
+const SOLO_ADMIN = [ROLES.ADMIN];
+const ADMIN_SUPERVISOR = [ROLES.ADMIN, ROLES.SUPERVISOR];
+
+module.exports = { ROLES, TODOS, OPERADORES, SOLO_ADMIN, ADMIN_SUPERVISOR };

@@ -1,3 +1,4 @@
+require('../src/main/core/env').cargarEnv();
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
 
@@ -37,6 +38,20 @@ async function main() {
     },
   });
   console.log('Usuario supervisor sembrado:', supervisor.usuario);
+
+  // Crear usuario cajero de prueba
+  const cajero = await prisma.usuario.upsert({
+    where: { usuario: 'cajero' },
+    update: {},
+    create: {
+      nombre: 'Cajero de Turno',
+      usuario: 'cajero',
+      passwordHash: await bcrypt.hash('cajero123', 12),
+      rol: 'CAJERO',
+      activo: true,
+    },
+  });
+  console.log('Usuario cajero sembrado:', cajero.usuario);
 
   // Crear productos de prueba
   const productos = [
@@ -98,10 +113,12 @@ async function main() {
   ];
 
   for (const prod of productos) {
-    await prisma.producto.upsert({
-      where: { codigoInterno: prod.codigoInterno },
-      update: {},
-      create: prod,
+    const existente = await prisma.producto.findUnique({ where: { codigoInterno: prod.codigoInterno } });
+    if (existente) continue;
+    const creado = await prisma.producto.create({ data: prod });
+    // El stock inicial queda registrado como movimiento, igual que desde la app
+    await prisma.movimientoInventario.create({
+      data: { productoId: creado.id, usuarioId: admin.id, tipo: 'ENTRADA', cantidad: prod.stock, motivo: 'Stock inicial' },
     });
   }
   console.log('Productos de prueba sembrados.');
