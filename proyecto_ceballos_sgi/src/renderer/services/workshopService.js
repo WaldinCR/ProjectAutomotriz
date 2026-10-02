@@ -1,12 +1,10 @@
-export async function crearOrden(data) {
-  return window.api.workshop.crearOrden(data);
-}
-export async function listarOrdenes() {
-  return window.api.workshop.listarOrdenes();
-}
-export async function cambiarEstado(data) {
-  return window.api.workshop.cambiarEstado(data);
-}
-export async function facturarOrden(data) {
-  return window.api.workshop.facturarOrden(data);
-}
+import { call } from './api';
+
+export const crearOrden    = (data)    => call(window.api.workshop.crearOrden, data);
+export const listarOrdenes = (filtros) => call(window.api.workshop.listarOrdenes, filtros);
+export const listarTecnicos = ()       => call(window.api.workshop.tecnicos);
+export const asignarTecnico = (data)   => call(window.api.workshop.asignar, data);
+export const agregarItem   = (data)    => call(window.api.workshop.agregarItem, data);
+export const quitarItem    = (data)    => call(window.api.workshop.quitarItem, data);
+export const cambiarEstado = (data)    => call(window.api.workshop.cambiarEstado, data);
+export const facturarOrden = (data)    => call(window.api.workshop.facturarOrden, data);

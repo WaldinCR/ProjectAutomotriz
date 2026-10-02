@@ -1,85 +1,161 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import PageLayout from '../components/PageLayout';
 import Alert from '../components/Alert';
 import Modal from '../components/Modal';
-import { buscarProducto, confirmarVenta } from '../services/posService';
-import { useAuthStore } from '../store/authStore';
+import Receipt from '../components/Receipt';
+import ComprobanteFields, { COMPROBANTE_VACIO, validarComprobante, datosComprobante } from '../components/ComprobanteFields';
+import { buscarProducto, confirmarVenta, calcularVenta } from '../services/posService';
+import { buscarProductos } from '../services/inventoryService';
+import { useConfigStore } from '../store/configStore';
+import { rd } from '../lib/format';
+
+const METODOS = [
+  { key: 'EFECTIVO', label: 'Efectivo', icon: 'ti-cash' },
+  { key: 'TARJETA', label: 'Tarjeta', icon: 'ti-credit-card' },
+  { key: 'TRANSFERENCIA', label: 'Transferencia', icon: 'ti-transfer' },
+];
+
+// Importe de línea en pantalla; el ITBIS y el total oficial los calcula el proceso principal
+const lineaSubtotal = (i) => Math.max(0, i.cantidad * i.precioUnitario);
 
 export default function POSPage() {
-  const { user } = useAuthStore();
   const [codigo, setCodigo] = useState('');
+  const [resultados, setResultados] = useState([]);
+  const [seleccion, setSeleccion] = useState(0);
   const [carrito, setCarrito] = useState([]);
   const [metodoPago, setMetodo] = useState('EFECTIVO');
+  const [descuento, setDescuento] = useState('');
   const [alerta, setAlerta] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [modalPago, setModalPago] = useState(false);
+  const [factura, setFactura] = useState(null);
+  const [comprobante, setComprobante] = useState(COMPROBANTE_VACIO);
+  const [verCliente, setVerCliente] = useState(false);
+  const [totales, setTotales] = useState(null);
   const inputRef = useRef(null);
+  const { config } = useConfigStore();
+  const emitirNcf = !!config?.emitirNcf;
 
-  const total = carrito.reduce((s, i) => s + i.subtotal, 0);
+  const subtotal = carrito.reduce((s, i) => s + lineaSubtotal(i), 0);
+  const montoDescuento = Math.min(Math.max(parseFloat(descuento) || 0, 0), subtotal);
+  const descuentoInvalido = (parseFloat(descuento) || 0) > subtotal;
+  const total = totales?.total ?? subtotal - montoDescuento;
+  const errorComprobante = validarComprobante(comprobante, emitirNcf);
 
-  async function handleScan(e) {
-    if (e.key !== 'Enter' || !codigo.trim()) return;
-    try {
-      const producto = await buscarProducto(codigo.trim());
-      if (!producto) {
-        setAlerta({ type: 'error', message: 'Producto no encontrado' });
-        setCodigo('');
-        return;
-      }
-      if (producto.stock <= 0) {
-        setAlerta({ type: 'warning', message: `Sin stock disponible para: ${producto.nombre}` });
-        setCodigo('');
-        return;
-      }
-      setCarrito(prev => {
-        const existe = prev.find(i => i.productoId === producto.id);
-        if (existe) {
-          return prev.map(i => i.productoId === producto.id
-            ? { ...i, cantidad: i.cantidad + 1, subtotal: (i.cantidad + 1) * i.precioUnitario }
-            : i);
-        }
-        return [...prev, {
-          productoId: producto.id,
-          codigoInterno: producto.codigoInterno,
-          nombre: producto.nombre,
-          precioUnitario: producto.precioVenta,
-          cantidad: 1,
-          subtotal: producto.precioVenta,
-        }];
-      });
-      setCodigo('');
-      setAlerta(null);
-    } catch {
-      setAlerta({ type: 'error', message: 'Error al buscar el producto' });
+  // Totales oficiales (ITBIS incluido) calculados por el proceso principal
+  useEffect(() => {
+    if (!carrito.length || descuentoInvalido) { setTotales(null); return; }
+    const t = setTimeout(() => {
+      calcularVenta({
+        items: carrito.map(i => ({ productoId: i.productoId, cantidad: i.cantidad })),
+        descuentoTotal: montoDescuento,
+      }).then(setTotales).catch(() => setTotales(null));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [carrito, montoDescuento, descuentoInvalido]);
+
+  // Búsqueda por nombre/categoría mientras se escribe (RF-10)
+  useEffect(() => {
+    const termino = codigo.trim();
+    if (termino.length < 2) { setResultados([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        setResultados(await buscarProductos(termino));
+        setSeleccion(0);
+      } catch { setResultados([]); }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [codigo]);
+
+  function agregar(producto) {
+    if (producto.stock <= 0) {
+      setAlerta({ type: 'warning', message: `Sin stock disponible para: ${producto.nombre}` });
+      return;
     }
+    const enCarrito = carrito.find(i => i.productoId === producto.id);
+    if (enCarrito && enCarrito.cantidad >= producto.stock) {
+      setAlerta({ type: 'warning', message: `Solo hay ${producto.stock} unidad(es) de ${producto.nombre}` });
+    } else {
+      setCarrito(prev => enCarrito
+        ? prev.map(i => i.productoId === producto.id ? { ...i, cantidad: i.cantidad + 1 } : i)
+        : [...prev, {
+            productoId: producto.id,
+            codigoInterno: producto.codigoInterno,
+            nombre: producto.nombre,
+            precioUnitario: producto.precioVenta,
+            stock: producto.stock,
+            cantidad: 1,
+          }]);
+      setAlerta(null);
+    }
+    setCodigo('');
+    setResultados([]);
+    inputRef.current?.focus();
+  }
+
+  async function handleKeyDown(e) {
+    if (e.key === 'ArrowDown' && resultados.length) {
+      e.preventDefault();
+      setSeleccion(s => Math.min(s + 1, resultados.length - 1));
+    } else if (e.key === 'ArrowUp' && resultados.length) {
+      e.preventDefault();
+      setSeleccion(s => Math.max(s - 1, 0));
+    } else if (e.key === 'Escape') {
+      setCodigo('');
+      setResultados([]);
+    } else if (e.key === 'Enter' && codigo.trim()) {
+      try {
+        // Primero código exacto (lector de barras); si no, el resultado resaltado
+        const exacto = await buscarProducto(codigo.trim());
+        if (exacto) return agregar(exacto);
+        if (resultados[seleccion]) return agregar(resultados[seleccion]);
+        setAlerta({ type: 'error', message: `No se encontró ningún producto para "${codigo.trim()}"` });
+      } catch (err) {
+        setAlerta({ type: 'error', message: err.message });
+      }
+    }
+  }
+
+  function cambiarCantidad(item, valor) {
+    const qty = Math.min(Math.max(1, parseInt(valor) || 1), item.stock);
+    if ((parseInt(valor) || 1) > item.stock) {
+      setAlerta({ type: 'warning', message: `Solo hay ${item.stock} unidad(es) de ${item.nombre}` });
+    }
+    setCarrito(prev => prev.map(i => i.productoId === item.productoId ? { ...i, cantidad: qty } : i));
+  }
+
+  function limpiar() {
+    setCarrito([]);
+    setDescuento('');
+    setComprobante(COMPROBANTE_VACIO);
+    setVerCliente(false);
   }
 
   async function handleConfirmar() {
     setCargando(true);
     try {
-      await confirmarVenta({ usuarioId: user.id, items: carrito, metodoPago });
-      setCarrito([]);
+      const venta = await confirmarVenta({
+        items: carrito.map(i => ({ productoId: i.productoId, cantidad: i.cantidad })),
+        metodoPago,
+        descuentoTotal: montoDescuento,
+        ...datosComprobante(comprobante, emitirNcf),
+      });
+      limpiar();
       setModalPago(false);
-      setAlerta({ type: 'success', message: 'Venta registrada correctamente' });
-      inputRef.current?.focus();
+      setFactura(venta);
+      setAlerta({ type: 'success', message: `Venta ${venta.numeroFactura} registrada correctamente` });
     } catch (e) {
+      setModalPago(false);
       setAlerta({ type: 'error', message: e.message });
     } finally {
       setCargando(false);
     }
   }
 
-  const metodos = [
-    { key: 'EFECTIVO', label: 'Efectivo', icon: 'ti-cash' },
-    { key: 'TARJETA', label: 'Tarjeta', icon: 'ti-credit-card' },
-    { key: 'TRANSFERENCIA', label: 'Transferencia', icon: 'ti-transfer' },
-  ];
-
   return (
     <PageLayout
       title="Punto de venta"
       subtitle="Escanea o busca productos para registrar una venta"
-      icon="ti-shopping-cart"
       actions={
         <span className="badge bg-blue" style={{ fontSize: '12px', padding: '5px 12px' }}>
           <i className="ti ti-circle-filled" style={{ fontSize: '9px', marginRight: '4px' }}></i>
@@ -96,19 +172,41 @@ export default function POSPage() {
       <div className="pos-grid">
         <div>
           <div className="card" style={{ padding: '16px', marginBottom: '14px' }}>
-            <label className="lbl">Código de barras o nombre del producto</label>
-            <div className="search-row" style={{ marginBottom: 0 }}>
-              <i className="ti ti-barcode"></i>
-              <input
-                ref={inputRef}
-                type="text"
-                placeholder="Escanea o escribe y presiona Enter"
-                value={codigo}
-                onChange={e => setCodigo(e.target.value)}
-                onKeyDown={handleScan}
-                autoFocus
-              />
-              <i className="ti ti-scan" style={{ color: '#cbd5e1', cursor: 'pointer' }}></i>
+            <label className="lbl">Código de barras, nombre o categoría</label>
+            <div className="search-wrap">
+              <div className="search-row" style={{ marginBottom: 0 }}>
+                <i className="ti ti-barcode"></i>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Escanea o escribe y presiona Enter (↑ ↓ para elegir)"
+                  value={codigo}
+                  onChange={e => setCodigo(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  autoFocus
+                />
+              </div>
+              {resultados.length > 0 && (
+                <div className="search-results">
+                  {resultados.map((p, idx) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={idx === seleccion ? 'sel' : ''}
+                      disabled={p.stock <= 0}
+                      onMouseDown={e => { e.preventDefault(); agregar(p); }}
+                    >
+                      <span>
+                        <strong>{p.nombre}</strong>
+                        <span className="muted"> · {p.categoria} · {p.codigoInterno}</span>
+                      </span>
+                      <span>
+                        {rd(p.precioVenta)} <span className="muted">({p.stock > 0 ? `stock ${p.stock}` : 'agotado'})</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -118,7 +216,7 @@ export default function POSPage() {
                 <i className="ti ti-shopping-cart" style={{ fontSize: '16px', color: '#64748b' }}></i>
                 <span className="tbl-top-title">Carrito de compra</span>
               </div>
-              <span className="badge bg-gray">{carrito.length} artículos</span>
+              <span className="badge bg-gray">{carrito.reduce((s, i) => s + i.cantidad, 0)} artículos</span>
             </div>
 
             <table>
@@ -152,21 +250,16 @@ export default function POSPage() {
                         <input
                           type="number"
                           min="1"
+                          max={item.stock}
                           value={item.cantidad}
-                          onChange={e => {
-                            const qty = Math.max(1, parseInt(e.target.value) || 1);
-                            setCarrito(prev => prev.map(i =>
-                              i.productoId === item.productoId
-                                ? { ...i, cantidad: qty, subtotal: qty * i.precioUnitario }
-                                : i
-                            ));
-                          }}
+                          onChange={e => cambiarCantidad(item, e.target.value)}
                           className="inp"
                           style={{ width: '64px', padding: '4px 6px', textAlign: 'center' }}
+                          title={`Disponible: ${item.stock}`}
                         />
                       </td>
-                      <td style={{ color: '#64748b' }}>RD$ {item.precioUnitario.toFixed(2)}</td>
-                      <td className="td-accent">RD$ {item.subtotal.toFixed(2)}</td>
+                      <td style={{ color: '#64748b' }}>{rd(item.precioUnitario)}</td>
+                      <td className="td-accent">{rd(lineaSubtotal(item))}</td>
                       <td>
                         <button
                           onClick={() => setCarrito(p => p.filter(i => i.productoId !== item.productoId))}
@@ -186,25 +279,71 @@ export default function POSPage() {
 
         <div>
           <div className="card" style={{ padding: '18px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 600, color: '#0f172a', marginBottom: '2px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: '#0f172a', marginBottom: '8px' }}>
               Resumen de venta
             </div>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>
-              Total a cobrar
+
+            <div className="data-row">
+              <span className="data-label">Subtotal</span>
+              <span className="data-val">{rd(subtotal)}</span>
             </div>
+            <div style={{ margin: '8px 0' }}>
+              <label className="lbl">Descuento (RD$)</label>
+              <input
+                className="inp"
+                type="number"
+                min="0"
+                placeholder="0.00"
+                value={descuento}
+                onChange={e => setDescuento(e.target.value)}
+                disabled={carrito.length === 0}
+              />
+              {descuentoInvalido && <span className="field-err">El descuento no puede superar el subtotal</span>}
+            </div>
+
+            {totales && (
+              <>
+                <div className="data-row">
+                  <span className="data-label">Base imponible</span>
+                  <span className="data-val">{rd(totales.subtotal)}</span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">ITBIS ({Math.round(totales.tasaItbis * 100)}%{totales.preciosIncluyenItbis ? ', incluido' : ''})</span>
+                  <span className="data-val">{rd(totales.itbis)}</span>
+                </div>
+              </>
+            )}
 
             <div className="total-split">
               <span style={{ fontSize: '13px', color: '#64748b' }}>Total</span>
-              <span style={{ fontSize: '24px', fontWeight: 700, color: '#1e3a5f' }}>
-                RD$ {total.toFixed(2)}
-              </span>
+              <span style={{ fontSize: '24px', fontWeight: 700, color: '#1e3a5f' }}>{rd(total)}</span>
             </div>
+
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ width: '100%', justifyContent: 'space-between', marginBottom: '10px' }}
+              onClick={() => setVerCliente(v => !v)}
+            >
+              <span>
+                <i className="ti ti-file-invoice"></i>{' '}
+                {emitirNcf ? `Comprobante ${comprobante.tipoComprobante}` : 'Datos del cliente'}
+                {comprobante.clienteNombre && ` · ${comprobante.clienteNombre}`}
+              </span>
+              <i className={`ti ${verCliente ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+            </button>
+            {(verCliente || (errorComprobante && carrito.length > 0)) && (
+              <div style={{ marginBottom: '12px' }}>
+                <ComprobanteFields valor={comprobante} onChange={setComprobante} emitirNcf={emitirNcf} />
+                {errorComprobante && <span className="field-err">{errorComprobante}</span>}
+              </div>
+            )}
 
             <div style={{ fontSize: '12px', fontWeight: 500, color: '#475569', marginBottom: '8px' }}>
               Método de pago
             </div>
 
-            {metodos.map(m => (
+            {METODOS.map(m => (
               <button
                 key={m.key}
                 onClick={() => setMetodo(m.key)}
@@ -217,18 +356,14 @@ export default function POSPage() {
 
             <button
               className="confirm-btn"
-              disabled={carrito.length === 0 || cargando}
+              disabled={carrito.length === 0 || cargando || descuentoInvalido || !!errorComprobante}
               onClick={() => setModalPago(true)}
             >
               <i className="ti ti-check"></i>
               {cargando ? 'Procesando...' : 'Confirmar venta'}
             </button>
 
-            <button
-              className="clear-btn"
-              onClick={() => setCarrito([])}
-              disabled={carrito.length === 0}
-            >
+            <button className="clear-btn" onClick={limpiar} disabled={carrito.length === 0}>
               Limpiar carrito
             </button>
           </div>
@@ -239,7 +374,19 @@ export default function POSPage() {
         <div style={{ padding: '8px 0' }}>
           <div style={{ background: '#f8fafc', borderRadius: '12px', padding: '18px', textAlign: 'center', marginBottom: '16px', border: '1px solid #e2e8f0' }}>
             <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Total a cobrar</p>
-            <p style={{ fontSize: '32px', fontWeight: 700, color: '#1e3a5f' }}>RD$ {total.toFixed(2)}</p>
+            <p style={{ fontSize: '32px', fontWeight: 700, color: '#1e3a5f' }}>{rd(total)}</p>
+            {montoDescuento > 0 && (
+              <p style={{ fontSize: '12px', color: '#64748b' }}>Incluye descuento de {rd(montoDescuento)}</p>
+            )}
+            {totales && (
+              <p style={{ fontSize: '12px', color: '#64748b' }}>ITBIS: {rd(totales.itbis)}</p>
+            )}
+            {emitirNcf && (
+              <p style={{ fontSize: '12px', color: '#64748b' }}>
+                Comprobante: <strong style={{ color: '#0f172a' }}>{comprobante.tipoComprobante}</strong>
+                {comprobante.clienteNombre && ` · ${comprobante.clienteNombre}`}
+              </p>
+            )}
             <p style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>
               Método: <strong style={{ color: '#0f172a' }}>{metodoPago}</strong>
             </p>
@@ -253,12 +400,15 @@ export default function POSPage() {
               style={{ flex: 1, justifyContent: 'center' }}
               onClick={handleConfirmar}
               disabled={cargando}
+              autoFocus
             >
               {cargando ? 'Procesando...' : 'Confirmar'}
             </button>
           </div>
         </div>
       </Modal>
+
+      <Receipt venta={factura} onClose={() => { setFactura(null); inputRef.current?.focus(); }} />
     </PageLayout>
   );
 }

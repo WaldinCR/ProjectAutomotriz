@@ -6,3 +6,7 @@ dist/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Instaladores y respaldos locales
+release/
+backups/

@@ -5,16 +5,21 @@
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
-    "dev": "concurrently \"vite src/renderer\" \"wait-on http-get://localhost:5173 && electron .\"",
-    "build": "vite build src/renderer && electron-builder"
+    "dev": "concurrently -k \"vite\" \"wait-on http-get://localhost:5173 && electron . --dev\"",
+    "build": "vite build && electron-builder",
+    "test": "node tests/run-tests.js",
+    "db:seed": "node prisma/seed.js",
+    "build:renderer": "vite build",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:new": "prisma migrate dev --create-only",
+    "dist:dir": "vite build && electron-builder --dir"
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",
-    "@tabler/icons-webfont": "^3.48.0",
     "bcrypt": "^5.1.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
-    "lucide-react": "^1.49.0",
     "node-schedule": "^2.1.1",
     "node-thermal-printer": "^4.3.4",
     "pdfkit": "^0.14.0",
@@ -22,11 +27,13 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@tabler/icons-webfont": "^3.48.0",
     "@vitejs/plugin-react": "^4.0.0",
     "autoprefixer": "^10.5.0",
     "concurrently": "^8.0.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
+    "lucide-react": "^1.49.0",
     "prisma": "^5.0.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
@@ -35,5 +42,52 @@
     "vite": "^5.0.0",
     "wait-on": "^7.0.0",
     "zustand": "^4.0.0"
+  },
+  "productName": "SGI Automotriz",
+  "author": "Repuestos Ceballos",
+  "build": {
+    "appId": "do.repuestosceballos.sgi",
+    "productName": "SGI Automotriz",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "package.json",
+      "src/main/**/*",
+      "src/preload/**/*",
+      "dist/**/*",
+      "prisma/schema.prisma",
+      "prisma/migrations/**/*",
+      {
+        "from": "node_modules/.prisma",
+        "to": "node_modules/.prisma",
+        "filter": [
+          "**/*"
+        ]
+      },
+      "!**/*.db"
+    ],
+    "asarUnpack": [
+      "node_modules/.prisma/**/*",
+      "node_modules/@prisma/engines/**/*",
+      "node_modules/bcrypt/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "SGI-Automotriz-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "SGI Automotriz"
+    }
   }
 }

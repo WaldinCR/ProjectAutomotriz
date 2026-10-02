@@ -2,16 +2,18 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuthStore } from '../store/authStore';
+import { logout as cerrarSesion } from '../services/authService';
+import Modal from './Modal';
+import CambiarPassword from './CambiarPassword';
 
 export default function PageLayout({ children, title, subtitle, actions }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [cambiarClave, setCambiarClave] = useState(false);
   const navigate = useNavigate();
   const { logout } = useAuthStore();
 
-  function handleLogout() {
-    if (window.api && window.api.auth) {
-      window.api.auth.logout();
-    }
+  async function handleLogout() {
+    await cerrarSesion().catch(() => {});
     logout();
     navigate('/login');
   }
@@ -33,10 +35,15 @@ export default function PageLayout({ children, title, subtitle, actions }) {
             </button>
             <h1 id="page-heading">{title || 'Repuestos Ceballos'}</h1>
           </div>
-          <button className="logout-btn" onClick={handleLogout} type="button">
-            <i className="ti ti-logout"></i>
-            <span>Cerrar sesión</span>
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="icon-btn" type="button" title="Cambiar mi contraseña" onClick={() => setCambiarClave(true)}>
+              <i className="ti ti-key"></i>
+            </button>
+            <button className="logout-btn" onClick={handleLogout} type="button">
+              <i className="ti ti-logout"></i>
+              <span>Cerrar sesión</span>
+            </button>
+          </div>
         </header>
 
         <main className="view-area">
@@ -54,6 +61,9 @@ export default function PageLayout({ children, title, subtitle, actions }) {
           </div>
         </main>
       </div>
+      <Modal open={cambiarClave} title="Cambiar mi contraseña" onClose={() => setCambiarClave(false)} size="sm">
+        <CambiarPassword onListo={() => setCambiarClave(false)} onCancelar={() => setCambiarClave(false)} />
+      </Modal>
     </div>
   );
 }

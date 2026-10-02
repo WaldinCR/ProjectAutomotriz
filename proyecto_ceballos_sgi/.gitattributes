@@ -1,0 +1,6 @@
+# Las migraciones deben conservar LF: su checksum se registra en _prisma_migrations
+prisma/migrations/**/*.sql text eol=lf
+prisma/migrations/migration_lock.toml text eol=lf
+# Binarios
+*.ttf binary
+*.png binary

@@ -941,3 +941,139 @@ label.lbl {
 .rpt-empty i {
   font-size: 38px;
 }
+/* ─── UTILIDADES COMUNES ─── */
+.btn:disabled,
+.confirm-btn:disabled,
+.rpt-generate:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field-err {
+  display: block;
+  color: #dc2626;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.warn-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  border-radius: 9px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+/* Resultados de búsqueda del POS */
+.search-wrap {
+  position: relative;
+}
+
+.search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.12);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.search-results button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.search-results button:hover,
+.search-results button.sel {
+  background: #f1f5f9;
+}
+
+.search-results button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Factura / recibo */
+.receipt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.receipt table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.receipt td {
+  padding: 2px 0;
+}
+
+.receipt hr {
+  border: none;
+  border-top: 1px dashed #94a3b8;
+  margin: 8px 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .receipt,
+  .receipt * {
+    visibility: visible;
+  }
+
+  .receipt {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+  }
+}
