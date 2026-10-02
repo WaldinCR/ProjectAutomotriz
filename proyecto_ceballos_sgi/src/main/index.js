@@ -1,10 +1,20 @@
 // Punto de entrada principal — Main Process (Electron)
 // Las variables de entorno se cargan ANTES de requerir los servicios:
 // estos leen process.env (DATABASE_URL, JWT_SECRET) al cargarse.
-require('./core/env').cargarEnv();
-
 const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
+
+// En la app instalada la carpeta del programa es de solo lectura:
+// la base de datos y el .env viven en %APPDATA%/SGI Automotriz
+if (app.isPackaged) {
+  require('./core/env').cargarEnv(path.join(app.getPath('userData'), '.env'));
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = `file:${path.join(app.getPath('userData'), 'sgi_database.db').split(path.sep).join('/')}`;
+  }
+} else {
+  require('./core/env').cargarEnv();
+}
+
 const fs = require('fs');
 const schedule = require('node-schedule');
 const { registerIpcHandlers } = require('./ipcHandlers');
@@ -71,12 +81,19 @@ La base de datos no fue modificada. Contacte al soporte técnico.`);
     return;
   }
 
+  // Primera instalación: garantiza un administrador para poder ingresar
+  await require('./auth/auth.service').asegurarAdministrador();
+
   // 1. Registrar manejadores IPC
   registerIpcHandlers();
 
   // 2. Servidor de supervisión remota (opcional)
   if (process.env.REMOTE_API_ENABLED !== 'false') {
-    expressServer = startServer(Number(process.env.PORT) || 3000, process.env.REMOTE_API_HOST || '127.0.0.1');
+    try {
+      expressServer = startServer(Number(process.env.PORT) || 3000, process.env.REMOTE_API_HOST || '127.0.0.1');
+    } catch (error) {
+      console.error('[Express]', error.message);
+    }
   }
 
   // 3. Copias de seguridad: diaria a las 11:59 PM y al iniciar si la última tiene más de 24 h

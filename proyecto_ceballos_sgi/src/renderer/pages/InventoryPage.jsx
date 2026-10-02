@@ -10,7 +10,7 @@ import {
 import { useAuthStore, ROLES } from '../store/authStore';
 import { rd, fechaHora } from '../lib/format';
 
-const VACIO = { nombre: '', codigoBarras: '', categoria: '', precioCompra: '', precioVenta: '', stock: '0', stockMinimo: '5' };
+const VACIO = { nombre: '', codigoBarras: '', categoria: '', precioCompra: '', precioVenta: '', stock: '0', stockMinimo: '5', exentoItbis: false };
 
 // Validación en pantalla; el proceso principal vuelve a validar todo
 function validarProducto(f, esNuevo) {
@@ -80,7 +80,7 @@ export default function InventoryPage() {
       form: {
         nombre: p.nombre, codigoBarras: p.codigoBarras || '', categoria: p.categoria,
         precioCompra: String(p.precioCompra), precioVenta: String(p.precioVenta),
-        stockMinimo: String(p.stockMinimo), activo: p.activo,
+        stockMinimo: String(p.stockMinimo), activo: p.activo, exentoItbis: p.exentoItbis,
       },
       errors: {},
     });
@@ -102,6 +102,7 @@ export default function InventoryPage() {
       precioCompra: Number(form.precioCompra),
       precioVenta: Number(form.precioVenta),
       stockMinimo: Number(form.stockMinimo),
+      exentoItbis: form.exentoItbis,
     };
     setGuardando(true);
     try {
@@ -241,6 +242,7 @@ export default function InventoryPage() {
                     <td className="td-bold">
                       {p.nombre}
                       {!p.activo && <span className="badge bg-gray" style={{ marginLeft: '6px' }}>Inactivo</span>}
+                      {p.exentoItbis && <span className="badge bg-purple" style={{ marginLeft: '6px' }} title="Exento de ITBIS">Exento</span>}
                     </td>
                     <td><span className={`badge ${categoriaBadge(p.categoria)}`}>{p.categoria}</span></td>
                     <td>{rd(p.precioVenta)}</td>
@@ -323,6 +325,10 @@ export default function InventoryPage() {
                 </Field>
               )}
             </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginTop: '12px' }}>
+              <input type="checkbox" checked={f.exentoItbis} onChange={ev => setCampo('exentoItbis', ev.target.checked)} />
+              Producto exento de ITBIS
+            </label>
             {modalProducto.modo === 'editar' && (
               <p className="muted" style={{ fontSize: '12px', marginTop: '10px' }}>
                 El stock no se edita aquí: use “Entrada” o “Ajuste” para que el movimiento quede registrado.

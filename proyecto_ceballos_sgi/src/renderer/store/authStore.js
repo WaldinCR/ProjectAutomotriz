@@ -3,11 +3,13 @@
 // la hace el proceso principal en cada llamada.
 import { create } from 'zustand';
 
-export const ROLES = { ADMIN: 'ADMINISTRADOR', CAJERO: 'CAJERO', SUPERVISOR: 'SUPERVISOR' };
+export const ROLES = { ADMIN: 'ADMINISTRADOR', CAJERO: 'CAJERO', SUPERVISOR: 'SUPERVISOR', TECNICO: 'TECNICO' };
 
 // Pantalla inicial según el rol
 export function rutaInicial(rol) {
-  return rol === ROLES.SUPERVISOR ? '/reportes' : '/pos';
+  if (rol === ROLES.SUPERVISOR) return '/reportes';
+  if (rol === ROLES.TECNICO) return '/taller';
+  return '/pos';
 }
 
 export const useAuthStore = create((set, get) => ({

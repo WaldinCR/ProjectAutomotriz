@@ -3,8 +3,10 @@ import PageLayout from '../components/PageLayout';
 import Alert from '../components/Alert';
 import Modal from '../components/Modal';
 import Receipt from '../components/Receipt';
-import { buscarProducto, confirmarVenta } from '../services/posService';
+import ComprobanteFields, { COMPROBANTE_VACIO, validarComprobante, datosComprobante } from '../components/ComprobanteFields';
+import { buscarProducto, confirmarVenta, calcularVenta } from '../services/posService';
 import { buscarProductos } from '../services/inventoryService';
+import { useConfigStore } from '../store/configStore';
 import { rd } from '../lib/format';
 
 const METODOS = [
@@ -13,7 +15,7 @@ const METODOS = [
   { key: 'TRANSFERENCIA', label: 'Transferencia', icon: 'ti-transfer' },
 ];
 
-// El precio mostrado es informativo: el total definitivo lo calcula el proceso principal
+// Importe de línea en pantalla; el ITBIS y el total oficial los calcula el proceso principal
 const lineaSubtotal = (i) => Math.max(0, i.cantidad * i.precioUnitario);
 
 export default function POSPage() {
@@ -27,12 +29,30 @@ export default function POSPage() {
   const [cargando, setCargando] = useState(false);
   const [modalPago, setModalPago] = useState(false);
   const [factura, setFactura] = useState(null);
+  const [comprobante, setComprobante] = useState(COMPROBANTE_VACIO);
+  const [verCliente, setVerCliente] = useState(false);
+  const [totales, setTotales] = useState(null);
   const inputRef = useRef(null);
+  const { config } = useConfigStore();
+  const emitirNcf = !!config?.emitirNcf;
 
   const subtotal = carrito.reduce((s, i) => s + lineaSubtotal(i), 0);
   const montoDescuento = Math.min(Math.max(parseFloat(descuento) || 0, 0), subtotal);
-  const total = subtotal - montoDescuento;
   const descuentoInvalido = (parseFloat(descuento) || 0) > subtotal;
+  const total = totales?.total ?? subtotal - montoDescuento;
+  const errorComprobante = validarComprobante(comprobante, emitirNcf);
+
+  // Totales oficiales (ITBIS incluido) calculados por el proceso principal
+  useEffect(() => {
+    if (!carrito.length || descuentoInvalido) { setTotales(null); return; }
+    const t = setTimeout(() => {
+      calcularVenta({
+        items: carrito.map(i => ({ productoId: i.productoId, cantidad: i.cantidad })),
+        descuentoTotal: montoDescuento,
+      }).then(setTotales).catch(() => setTotales(null));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [carrito, montoDescuento, descuentoInvalido]);
 
   // Búsqueda por nombre/categoría mientras se escribe (RF-10)
   useEffect(() => {
@@ -107,6 +127,8 @@ export default function POSPage() {
   function limpiar() {
     setCarrito([]);
     setDescuento('');
+    setComprobante(COMPROBANTE_VACIO);
+    setVerCliente(false);
   }
 
   async function handleConfirmar() {
@@ -116,6 +138,7 @@ export default function POSPage() {
         items: carrito.map(i => ({ productoId: i.productoId, cantidad: i.cantidad })),
         metodoPago,
         descuentoTotal: montoDescuento,
+        ...datosComprobante(comprobante, emitirNcf),
       });
       limpiar();
       setModalPago(false);
@@ -278,10 +301,43 @@ export default function POSPage() {
               {descuentoInvalido && <span className="field-err">El descuento no puede superar el subtotal</span>}
             </div>
 
+            {totales && (
+              <>
+                <div className="data-row">
+                  <span className="data-label">Base imponible</span>
+                  <span className="data-val">{rd(totales.subtotal)}</span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">ITBIS ({Math.round(totales.tasaItbis * 100)}%{totales.preciosIncluyenItbis ? ', incluido' : ''})</span>
+                  <span className="data-val">{rd(totales.itbis)}</span>
+                </div>
+              </>
+            )}
+
             <div className="total-split">
               <span style={{ fontSize: '13px', color: '#64748b' }}>Total</span>
               <span style={{ fontSize: '24px', fontWeight: 700, color: '#1e3a5f' }}>{rd(total)}</span>
             </div>
+
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ width: '100%', justifyContent: 'space-between', marginBottom: '10px' }}
+              onClick={() => setVerCliente(v => !v)}
+            >
+              <span>
+                <i className="ti ti-file-invoice"></i>{' '}
+                {emitirNcf ? `Comprobante ${comprobante.tipoComprobante}` : 'Datos del cliente'}
+                {comprobante.clienteNombre && ` · ${comprobante.clienteNombre}`}
+              </span>
+              <i className={`ti ${verCliente ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+            </button>
+            {(verCliente || (errorComprobante && carrito.length > 0)) && (
+              <div style={{ marginBottom: '12px' }}>
+                <ComprobanteFields valor={comprobante} onChange={setComprobante} emitirNcf={emitirNcf} />
+                {errorComprobante && <span className="field-err">{errorComprobante}</span>}
+              </div>
+            )}
 
             <div style={{ fontSize: '12px', fontWeight: 500, color: '#475569', marginBottom: '8px' }}>
               Método de pago
@@ -300,7 +356,7 @@ export default function POSPage() {
 
             <button
               className="confirm-btn"
-              disabled={carrito.length === 0 || cargando || descuentoInvalido}
+              disabled={carrito.length === 0 || cargando || descuentoInvalido || !!errorComprobante}
               onClick={() => setModalPago(true)}
             >
               <i className="ti ti-check"></i>
@@ -321,6 +377,15 @@ export default function POSPage() {
             <p style={{ fontSize: '32px', fontWeight: 700, color: '#1e3a5f' }}>{rd(total)}</p>
             {montoDescuento > 0 && (
               <p style={{ fontSize: '12px', color: '#64748b' }}>Incluye descuento de {rd(montoDescuento)}</p>
+            )}
+            {totales && (
+              <p style={{ fontSize: '12px', color: '#64748b' }}>ITBIS: {rd(totales.itbis)}</p>
+            )}
+            {emitirNcf && (
+              <p style={{ fontSize: '12px', color: '#64748b' }}>
+                Comprobante: <strong style={{ color: '#0f172a' }}>{comprobante.tipoComprobante}</strong>
+                {comprobante.clienteNombre && ` · ${comprobante.clienteNombre}`}
+              </p>
             )}
             <p style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>
               Método: <strong style={{ color: '#0f172a' }}>{metodoPago}</strong>

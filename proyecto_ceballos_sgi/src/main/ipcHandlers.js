@@ -82,7 +82,14 @@ function registerIpcHandlers() {
     sesiones.cerrar(event.sender.id);
     return { ok: true, data: true };
   });
-  protegido('auth:sesion', TODOS, (_datos, usuario) => usuario);
+  // Canales permitidos aun con contraseña temporal
+  ipcMain.handle('auth:sesion', (event) => responder(() => sesiones.requerir(event.sender.id, TODOS, { permitirTemporal: true })));
+  ipcMain.handle('auth:cambiarPassword', (event, datos) => responder(async () => {
+    const actor = sesiones.requerir(event.sender.id, TODOS, { permitirTemporal: true });
+    const usuario = await authService.cambiarPassword(datos, actor);
+    sesiones.actualizar(event.sender.id, usuario);
+    return usuario;
+  }));
 
   // ── Configuración de la empresa ────────────────
   protegido('config:obtener', TODOS, () => configService.obtener());
@@ -135,6 +142,7 @@ function registerIpcHandlers() {
   protegido('reports:factura', GESTION, (ventaId, u) => reportsService.generarFactura(ventaId, u));
   protegido('reports:cierre', GESTION, (cierreId, u) => reportsService.generarCierre(cierreId, u));
   protegido('reports:abrir', GESTION, (ruta) => abrirDocumento(ruta));
+  protegido('reports:empleados', ADMIN_SUPERVISOR, () => adminService.listarEmpleados());
 
   // ── Admin ──────────────────────────────────────
   protegido('admin:usuarios', SOLO_ADMIN, () => adminService.listarUsuarios());

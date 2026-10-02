@@ -47,18 +47,37 @@ RF-29 placa · RF-34 OT solo se cierra facturada · RF-38 justificación de dife
 RF-40 historial de cierres · RF-46 ganancia bruta estimada · RF-50 auditoría de cambios de precio ·
 RF-53 filtros de auditoría · RNF-06 expiración por inactividad · RNF-13 respaldo garantizado cada 24 h.
 
-## Pendiente (requiere decisión del negocio)
+## Fase 2 — pendientes resueltos
 
-- **ITBIS / comprobantes fiscales (NCF)**: el README anunciaba ITBIS 18 % pero nunca se calculó. Si se factura formalmente en RD hace falta definir tasas, NCF y formato DGII.
-- **Rol Mecánico/Técnico** (SRS 2.3) y técnico asignado en la OT (RF-29): requiere definir el flujo.
-- **Impresora térmica ESC/POS**: `node-thermal-printer` está instalado pero sin usar; hoy se imprime con el diálogo del sistema.
-- **Montos en `Float`**: se redondea a 2 decimales; lo ideal a futuro es guardar centavos como enteros (migración de datos).
-- **Migraciones**: se usa `prisma db push`; para producción conviene `prisma migrate`.
-- **TLS en la API remota** (RNF-07): se delega al túnel; no exponer el puerto directamente.
-- **Reportes con filtro por empleado/producto** (RF-47).
+| Pendiente | Solución |
+|---|---|
+| ITBIS / comprobantes fiscales | ITBIS por línea (incluido o agregado, productos exentos, descuento prorrateado sin perder centavos). Secuencias NCF B01/B02/B14/B15 con vencimiento, numeración atómica y bloqueo al agotarse. RNC con dígito verificador DGII. Exportación 607/608. |
+| Rol Mecánico/Técnico (RF-29/30/35) | Rol `TECNICO`: ve solo sus órdenes, cambia estados (no cancela ni factura), registra/quita repuestos con efecto en inventario. Asignación y filtros por técnico, estado y fechas. |
+| Impresora térmica ESC/POS | Red (`tcp://ip:9100`) o impresora compartida de Windows, sin controladores nativos. Prueba de impresión e impresión automática; un fallo de impresora nunca anula la venta. |
+| Migraciones | Baseline `0_init` + migraciones versionadas. La app las aplica sola al iniciar (con respaldo previo, una transacción por migración) y reconoce bases antiguas creadas con `db push`. `.gitattributes` fija LF para que el checksum no cambie entre equipos. |
+| TLS en la API remota (RNF-07) | HTTPS con `REMOTE_API_TLS_CERT/KEY` (verificado: TLS 1.3). Si el certificado falla la API no arranca; aviso si se expone sin TLS. |
+| Filtros de reportes (RF-47) | Reporte de ventas por rango, empleado y producto. |
+| PDFs sin identidad | Kit de diseño (`reports/pdf/brand.js`): logo, Work Sans y paleta de la app; membrete, tarjetas KPI, gráficos, tablas cebra, firmas, paginación. Factura fiscal y comprobante de arqueo nuevos. |
+| Primera instalación | Sin usuarios se crea `admin` con contraseña temporal; las contraseñas nuevas o restablecidas deben cambiarse al ingresar (también bloquea el acceso remoto). Cambio de contraseña propio. |
+| Empaquetado | Configuración de electron-builder (instalador NSIS); en la app instalada la base y el `.env` viven en `%APPDATA%`. |
+
+## Decisión técnica: montos en `Float`
+
+Se evaluó migrar todos los montos a enteros (centavos). **No se hizo**, deliberadamente:
+
+- Todo cálculo monetario pasa por `dinero()` (redondeo a 2 decimales) en el backend, y el ITBIS reparte el redondeo en la última línea. Un `double` representa exactamente cualquier monto en centavos hasta ~90 billones de pesos.
+- La migración tocaría cada tabla con dinero, cada servicio, reporte y pantalla, con riesgo alto sobre datos reales y sin beneficio práctico para este volumen.
+- Si en el futuro se integra contabilidad o facturación electrónica (e-CF), conviene hacerlo con `Decimal` de Prisma en ese momento.
+
+## Pendiente (fuera del alcance del software)
+
+- **Facturación electrónica (e-CF)**: la DGII está migrando a e-CF; requiere certificado digital y proveedor/integración con la DGII.
+- **Certificado TLS real** para la API remota (el sistema ya lo soporta) o un túnel cifrado.
+- **Firma de código** del instalador (requiere certificado de firma de Windows).
 
 ## Verificación
 
-- `npm test`: 24 pruebas de reglas de negocio sobre una base SQLite temporal.
-- Prueba end-to-end de la app Electron real (copia de la base): login, POS por nombre y código,
-  factura, OT completa hasta facturar, permisos de cajero y supervisor, reportes PDF y respaldo.
+- `npm test`: 35 pruebas (seguridad, inventario, POS, taller, caja, ITBIS/NCF, técnico, impresión ESC/POS, migraciones, cuentas, API remota) sobre una base SQLite temporal creada con las mismas migraciones de la app.
+- Pruebas end-to-end de la app Electron real sobre copias de la base: migración automática de una base
+  antigua, configuración de empresa/NCF/impresora, venta con crédito fiscal (NCF + ITBIS + ticket),
+  flujo completo del técnico, facturación de OT, permisos por rol, reportes PDF y exportación DGII.

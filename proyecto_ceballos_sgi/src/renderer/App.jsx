@@ -9,9 +9,12 @@ import CashierPage   from './pages/CashierPage';
 import ReportsPage   from './pages/ReportsPage';
 import AdminPage     from './pages/AdminPage';
 import Spinner       from './components/Spinner';
+import CambiarPassword from './components/CambiarPassword';
+import { logout as cerrarSesion } from './services/authService';
 import { useAuthStore, rutaInicial } from './store/authStore';
 import { NAVEGACION } from './lib/navigation';
 import { sesion } from './services/authService';
+import { useConfigStore } from './store/configStore';
 
 const PANTALLAS = {
   '/pos':        <POSPage />,
@@ -41,7 +44,28 @@ export default function App() {
       .finally(() => setRestaurando(false));
   }, [setAuth]);
 
+  // Datos de la empresa (nombre, ITBIS, NCF, impresora) para toda la interfaz
+  const cargarConfig = useConfigStore(s => s.cargar);
+  useEffect(() => {
+    if (user) cargarConfig(true).catch(() => {});
+  }, [user, cargarConfig]);
+
   if (restaurando) return <Spinner text="Iniciando..." />;
+
+  // Contraseña temporal: no se accede a ninguna pantalla hasta cambiarla
+  if (user?.debeCambiarPassword) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--mist)' }}>
+        <div className="card" style={{ width: '420px', padding: '28px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--navy)', marginBottom: '4px' }}>Hola, {user.nombre}</h2>
+          <CambiarPassword
+            obligatorio
+            onCancelar={() => cerrarSesion().catch(() => {}).finally(() => useAuthStore.getState().logout())}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <HashRouter>

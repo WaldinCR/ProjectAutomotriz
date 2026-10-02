@@ -61,6 +61,9 @@ function createApp() {
     if (!ADMIN_SUPERVISOR.includes(usuario.rol)) {
       throw new AppError('Acceso remoto no permitido para este rol', 'PROHIBIDO');
     }
+    if (usuario.debeCambiarPassword) {
+      throw new AppError('Debe cambiar su contraseña temporal en la aplicación antes de usar el acceso remoto', 'PROHIBIDO');
+    }
     return { token: authService.emitirToken(usuario), usuario };
   }));
 
@@ -115,7 +118,12 @@ function opcionesTls() {
   const cert = process.env.REMOTE_API_TLS_CERT;
   const key = process.env.REMOTE_API_TLS_KEY;
   if (!cert || !key) return null;
-  return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
+  try {
+    return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
+  } catch (error) {
+    // Nunca se degrada a HTTP en silencio si se pidió TLS
+    throw new Error(`No se pudo leer el certificado TLS de la API remota (${error.message}). La API no se iniciará.`);
+  }
 }
 
 function startServer(port = 3000, host = '127.0.0.1') {

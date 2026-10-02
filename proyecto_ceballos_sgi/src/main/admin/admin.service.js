@@ -12,7 +12,7 @@ const SALT_ROUNDS = 12;
 // Nunca se envía passwordHash fuera del proceso principal
 const CAMPOS_PUBLICOS = {
   id: true, nombre: true, usuario: true, rol: true, activo: true,
-  ultimoAcceso: true, bloqueadoHasta: true, createdAt: true,
+  ultimoAcceso: true, bloqueadoHasta: true, debeCambiarPassword: true, createdAt: true,
 };
 
 function listarUsuarios() {
@@ -28,7 +28,7 @@ async function crearUsuario(datos, actor) {
   const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
   return prisma.$transaction(async (tx) => {
     const creado = await tx.usuario.create({
-      data: { nombre: data.nombre, usuario: data.usuario, rol: data.rol, passwordHash, activo: true },
+      data: { nombre: data.nombre, usuario: data.usuario, rol: data.rol, passwordHash, activo: true, debeCambiarPassword: true },
       select: CAMPOS_PUBLICOS,
     });
     await auditService.registrar({
@@ -85,7 +85,8 @@ async function restablecerPassword(datos, actor) {
   await prisma.$transaction(async (tx) => {
     await tx.usuario.update({
       where: { id },
-      data: { passwordHash, intentosFallidos: 0, bloqueadoHasta: null },
+      // La contraseña asignada por el administrador es temporal
+      data: { passwordHash, intentosFallidos: 0, bloqueadoHasta: null, debeCambiarPassword: true },
     });
     await auditService.registrar({
       tabla: 'Usuario', accion: 'RESTABLECER_PASSWORD', registroId: id, usuarioId: actor.id,
@@ -93,6 +94,11 @@ async function restablecerPassword(datos, actor) {
   });
   if (id !== actor.id) sesiones.cerrarDeUsuario(id);
   return { success: true };
+}
+
+// Lista mínima (id, nombre, rol) para filtros de reportes
+function listarEmpleados() {
+  return prisma.usuario.findMany({ select: { id: true, nombre: true, rol: true }, orderBy: { nombre: 'asc' } });
 }
 
 function consultarAuditLog(filtros) {
@@ -105,4 +111,5 @@ module.exports = {
   editarUsuario,
   restablecerPassword,
   consultarAuditLog,
+  listarEmpleados,
 };

@@ -8,9 +8,12 @@
     "dev": "concurrently -k \"vite\" \"wait-on http-get://localhost:5173 && electron . --dev\"",
     "build": "vite build && electron-builder",
     "test": "node tests/run-tests.js",
-    "db:push": "prisma db push",
     "db:seed": "node prisma/seed.js",
-    "build:renderer": "vite build"
+    "build:renderer": "vite build",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:new": "prisma migrate dev --create-only",
+    "dist:dir": "vite build && electron-builder --dir"
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",
@@ -39,5 +42,45 @@
     "vite": "^5.0.0",
     "wait-on": "^7.0.0",
     "zustand": "^4.0.0"
+  },
+  "productName": "SGI Automotriz",
+  "author": "Repuestos Ceballos",
+  "build": {
+    "appId": "do.repuestosceballos.sgi",
+    "productName": "SGI Automotriz",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "package.json",
+      "src/main/**/*",
+      "src/preload/**/*",
+      "dist/**/*",
+      "prisma/schema.prisma",
+      "prisma/migrations/**/*",
+      "!**/*.db"
+    ],
+    "asarUnpack": [
+      "node_modules/.prisma/**/*",
+      "node_modules/@prisma/engines/**/*",
+      "node_modules/bcrypt/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "SGI-Automotriz-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "SGI Automotriz"
+    }
   }
 }

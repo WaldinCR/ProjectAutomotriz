@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
     login:  invoke('auth:login'),
     logout: invoke('auth:logout'),
     sesion: invoke('auth:sesion'),
+    cambiarPassword: invoke('auth:cambiarPassword'),
   },
 
   // ── Configuración e impresora ──────────────────
@@ -76,6 +77,7 @@ contextBridge.exposeInMainWorld('api', {
     factura:    invoke('reports:factura'),
     cierre:     invoke('reports:cierre'),
     abrir:      invoke('reports:abrir'),
+    empleados:  invoke('reports:empleados'),
   },
 
   // ── Admin ──────────────────────────────────────

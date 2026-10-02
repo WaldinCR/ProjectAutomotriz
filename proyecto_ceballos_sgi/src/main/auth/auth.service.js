@@ -61,7 +61,39 @@ async function login(datos) {
   });
   await auditService.registrar({ tabla: 'Usuario', accion: 'LOGIN', registroId: user.id, usuarioId: user.id });
 
-  return { id: user.id, nombre: user.nombre, rol: user.rol };
+  return { id: user.id, nombre: user.nombre, rol: user.rol, debeCambiarPassword: user.debeCambiarPassword };
+}
+
+// Cambio de contraseña por el propio usuario (obligatorio si es temporal)
+async function cambiarPassword(datos, actor) {
+  const { actual, nueva } = schemas.cambiarPassword.parse(datos);
+  const user = await prisma.usuario.findUnique({ where: { id: actor.id } });
+  if (!user || !(await bcrypt.compare(actual, user.passwordHash))) {
+    throw new AppError('La contraseña actual no es correcta', 'CREDENCIALES');
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.usuario.update({
+      where: { id: actor.id },
+      data: { passwordHash: await bcrypt.hash(nueva, 12), debeCambiarPassword: false },
+    });
+    await auditService.registrar({ tabla: 'Usuario', accion: 'CAMBIAR_PASSWORD', registroId: actor.id, usuarioId: actor.id }, tx);
+  });
+  return { id: user.id, nombre: user.nombre, rol: user.rol, debeCambiarPassword: false };
+}
+
+// Primera instalación: sin usuarios no se podría iniciar sesión.
+// Se crea `admin` con contraseña temporal que debe cambiarse al entrar.
+async function asegurarAdministrador() {
+  if (await prisma.usuario.count() > 0) return null;
+  const admin = await prisma.usuario.create({
+    data: {
+      nombre: 'Administrador', usuario: 'admin', rol: 'ADMINISTRADOR',
+      passwordHash: await bcrypt.hash('admin123', 12), debeCambiarPassword: true,
+    },
+  });
+  await auditService.registrar({ tabla: 'Usuario', accion: 'CREAR_USUARIO_INICIAL', registroId: admin.id });
+  console.log('[Instalación] Usuario inicial creado: admin / admin123 (debe cambiarse al ingresar)');
+  return admin;
 }
 
 // Token para la API remota del supervisor
@@ -73,4 +105,4 @@ function verificarToken(token) {
   return jwt.verify(token, process.env.JWT_SECRET);
 }
 
-module.exports = { login, emitirToken, verificarToken, MAX_INTENTOS };
+module.exports = { login, cambiarPassword, asegurarAdministrador, emitirToken, verificarToken, MAX_INTENTOS };

@@ -22,6 +22,7 @@ model Usuario {
   intentosFallidos Int     @default(0)  // RF-06: bloqueo tras 5 intentos
   bloqueadoHasta   DateTime?
   ultimoAcceso     DateTime?           // RF-05
+  debeCambiarPassword Boolean @default(false) // Contraseña temporal (usuario inicial o restablecida)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

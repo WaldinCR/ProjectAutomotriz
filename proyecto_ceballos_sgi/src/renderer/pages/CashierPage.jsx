@@ -4,6 +4,8 @@ import Alert from '../components/Alert';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
 import Field from '../components/Field';
+import Receipt from '../components/Receipt';
+import { cierrePdf, generarYAbrir } from '../services/reportsService';
 import { resumenTurno, confirmarCierre, historialCierres } from '../services/cashierService';
 import { listarVentas, anularVenta } from '../services/posService';
 import { useAuthStore, ROLES } from '../store/authStore';
@@ -25,6 +27,8 @@ export default function CashierPage() {
   const [alerta, setAlerta] = useState(null);
   const [modal, setModal] = useState(false);
   const [anular, setAnular] = useState(null); // { venta, motivo, error }
+  const [verVenta, setVerVenta] = useState(null);
+  const [cierreReciente, setCierreReciente] = useState(null);
   const [cargando, setCargando] = useState(false);
 
   useEffect(() => { cargar(); }, [tab]);
@@ -57,8 +61,9 @@ export default function CashierPage() {
   async function handleCierre() {
     setCargando(true);
     try {
-      await confirmarCierre({ efectivoContado: numContado, observaciones: obs.trim() || undefined });
-      setAlerta({ type: 'success', msg: 'Cierre de caja confirmado correctamente' });
+      const cierre = await confirmarCierre({ efectivoContado: numContado, observaciones: obs.trim() || undefined });
+      setAlerta({ type: 'success', msg: `Cierre de caja #${cierre.id} confirmado correctamente` });
+      setCierreReciente(cierre.id);
       setContado('');
       setObs('');
       cargar();
@@ -84,6 +89,8 @@ export default function CashierPage() {
     }
   }
 
+  const abrirCierre = (id) => generarYAbrir(() => cierrePdf(id)).catch(e => setAlerta({ type: 'error', msg: e.message }));
+
   // Una venta ya incluida en un cierre no puede anularse
   const ventaCerrada = (v) => resumen?.ultimoCierre && new Date(v.fecha) <= new Date(resumen.ultimoCierre.fecha);
 
@@ -92,6 +99,14 @@ export default function CashierPage() {
       {alerta && (
         <div style={{ marginBottom: '14px' }}>
           <Alert type={alerta.type} message={alerta.msg} onClose={() => setAlerta(null)} />
+        </div>
+      )}
+      {cierreReciente && (
+        <div className="info-box" style={{ marginBottom: '14px', justifyContent: 'space-between' }}>
+          <span><i className="ti ti-file-check"></i> Comprobante del cierre #{cierreReciente} listo.</span>
+          <button className="btn btn-dark btn-sm" onClick={() => abrirCierre(cierreReciente)}>
+            <i className="ti ti-file-type-pdf"></i>Ver / imprimir arqueo
+          </button>
         </div>
       )}
 
@@ -218,14 +233,15 @@ export default function CashierPage() {
         <div className="tbl-wrap">
           <table>
             <thead>
-              <tr><th>Factura</th><th>Hora</th><th>Cajero</th><th>Método</th><th>Total</th><th>Estado</th><th></th></tr>
+              <tr><th>Factura</th><th>NCF</th><th>Hora</th><th>Cajero</th><th>Método</th><th>Total</th><th>Estado</th><th></th></tr>
             </thead>
             <tbody>
               {ventas.length === 0 ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>No hay ventas registradas hoy</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>No hay ventas registradas hoy</td></tr>
               ) : ventas.map(v => (
                 <tr key={v.id}>
                   <td className="td-mono">{v.numeroFactura}</td>
+                  <td className="td-mono">{v.ncf || '—'}</td>
                   <td>{new Date(v.fecha).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' })}</td>
                   <td>{v.usuario?.nombre}</td>
                   <td>{v.metodoPago}</td>
@@ -234,11 +250,16 @@ export default function CashierPage() {
                     <span className={`badge ${v.estado === 'ANULADA' ? 'bg-red' : 'bg-green'}`} title={v.motivoAnulacion || undefined}>{v.estado}</span>
                   </td>
                   <td>
-                    {puedeAnular && v.estado === 'CONFIRMADA' && (
-                      ventaCerrada(v)
-                        ? <span className="muted" style={{ fontSize: '11px' }}>En cierre</span>
-                        : <button className="btn btn-ghost btn-sm" style={{ color: '#dc2626' }} onClick={() => setAnular({ venta: v, motivo: '' })}>Anular</button>
-                    )}
+                    <div className="row-actions">
+                      <button className="btn btn-ghost btn-sm" title="Ver / reimprimir factura" onClick={() => setVerVenta(v)}>
+                        <i className="ti ti-receipt" style={{ fontSize: '12px' }}></i>
+                      </button>
+                      {puedeAnular && v.estado === 'CONFIRMADA' && (
+                        ventaCerrada(v)
+                          ? <span className="muted" style={{ fontSize: '11px', alignSelf: 'center' }}>En cierre</span>
+                          : <button className="btn btn-ghost btn-sm" style={{ color: '#dc2626' }} onClick={() => setAnular({ venta: v, motivo: '' })}>Anular</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -249,11 +270,11 @@ export default function CashierPage() {
         <div className="tbl-wrap">
           <table>
             <thead>
-              <tr><th>Fecha</th><th>Cajero</th><th>Total ventas</th><th>Esperado</th><th>Contado</th><th>Diferencia</th><th>Observaciones</th></tr>
+              <tr><th>Fecha</th><th>Cajero</th><th>Total ventas</th><th>Esperado</th><th>Contado</th><th>Diferencia</th><th>Observaciones</th><th></th></tr>
             </thead>
             <tbody>
               {cierres.length === 0 ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>No hay cierres registrados</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>No hay cierres registrados</td></tr>
               ) : cierres.map(c => (
                 <tr key={c.id}>
                   <td>{fechaHora(c.fecha)}</td>
@@ -265,6 +286,11 @@ export default function CashierPage() {
                     {c.diferencia > 0 ? '+' : ''}{rd(c.diferencia)}
                   </td>
                   <td style={{ whiteSpace: 'normal', maxWidth: '240px' }}>{c.observaciones || '—'}</td>
+                  <td>
+                    <button className="btn btn-ghost btn-sm" title="Comprobante de arqueo (PDF)" onClick={() => abrirCierre(c.id)}>
+                      <i className="ti ti-file-type-pdf" style={{ fontSize: '12px' }}></i>
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -316,6 +342,7 @@ export default function CashierPage() {
           </>
         )}
       </Modal>
+      <Receipt venta={verVenta} onClose={() => setVerVenta(null)} titulo={`Factura ${verVenta?.numeroFactura || ''}`} />
     </PageLayout>
   );
 }

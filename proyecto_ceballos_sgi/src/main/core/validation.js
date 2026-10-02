@@ -72,6 +72,11 @@ const editarUsuario = z.object({
 
 const restablecerPassword = z.object({ id: id('El usuario'), password });
 
+const cambiarPassword = z.object({
+  actual: z.string({ required_error: 'Indique su contraseña actual' }).min(1, 'Indique su contraseña actual').max(72),
+  nueva: password,
+}).refine(d => d.actual !== d.nueva, { message: 'La nueva contraseña debe ser distinta de la actual' });
+
 const filtrosAudit = z.object({
   usuarioId: id('El usuario').optional().nullable(),
   accion: z.string().trim().max(60).optional().nullable(),
@@ -253,7 +258,7 @@ module.exports = {
   comprobante, actualizarConfig, guardarSecuencia, calcularVenta,
   asignarTecnico, agregarItemOrden, quitarItemOrden, filtrosOrdenes, reporteVentas,
   METODOS_PAGO, ESTADOS_OT,
-  login, crearUsuario, editarUsuario, restablecerPassword, filtrosAudit,
+  login, crearUsuario, editarUsuario, restablecerPassword, cambiarPassword, filtrosAudit,
   crearProducto, editarProducto, entradaInventario, ajusteInventario, busqueda,
   confirmarVenta, anularVenta, listarVentas,
   crearOrden, cambiarEstado, facturarOrden,

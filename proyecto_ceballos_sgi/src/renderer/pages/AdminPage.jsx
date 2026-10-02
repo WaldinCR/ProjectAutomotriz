@@ -4,6 +4,7 @@ import Modal from '../components/Modal';
 import Alert from '../components/Alert';
 import Spinner from '../components/Spinner';
 import Field from '../components/Field';
+import EmpresaConfig from '../components/EmpresaConfig';
 import {
   listarUsuarios, crearUsuario, editarUsuario, restablecerPassword, consultarAuditLog, realizarBackup,
 } from '../services/adminService';
@@ -13,7 +14,7 @@ import { fechaHora } from '../lib/format';
 
 const NUEVO = { nombre: '', usuario: '', password: '', confirmar: '', rol: ROLES.CAJERO };
 const FILTROS = { usuarioId: '', accion: '', desde: '', hasta: '' };
-const ROL_BADGE = { [ROLES.ADMIN]: 'bg-blue', [ROLES.SUPERVISOR]: 'bg-yellow', [ROLES.CAJERO]: 'bg-gray' };
+const ROL_BADGE = { [ROLES.ADMIN]: 'bg-blue', [ROLES.SUPERVISOR]: 'bg-yellow', [ROLES.CAJERO]: 'bg-gray', [ROLES.TECNICO]: 'bg-purple' };
 
 function validarPassword(password, confirmar) {
   if (password.length < 8) return 'La contraseña debe tener al menos 8 caracteres';
@@ -48,7 +49,7 @@ export default function AdminPage() {
   const [reset, setReset] = useState(null);         // { usuario, password, confirmar, error }
   const [logDetalle, setLogDetalle] = useState(null);
 
-  useEffect(() => { cargar(); }, [tab]);
+  useEffect(() => { if (tab !== 'empresa') cargar(); }, [tab]);
 
   async function cargar(f = filtros) {
     setLoading(true);
@@ -135,7 +136,7 @@ export default function AdminPage() {
   return (
     <PageLayout
       title="Administración"
-      subtitle="Usuarios, auditoría y respaldos del sistema"
+      subtitle="Usuarios, auditoría, empresa y respaldos del sistema"
       actions={
         <button className="btn btn-ghost" onClick={handleBackup} disabled={guardando}>
           <i className="ti ti-database-export"></i>Respaldar ahora
@@ -155,6 +156,9 @@ export default function AdminPage() {
           </button>
           <button type="button" className={`tab-btn ${tab === 'audit' ? 'on' : ''}`} onClick={() => setTab('audit')}>
             <i className="ti ti-eye"></i>Auditoría
+          </button>
+          <button type="button" className={`tab-btn ${tab === 'empresa' ? 'on' : ''}`} onClick={() => setTab('empresa')}>
+            <i className="ti ti-building-store"></i>Empresa
           </button>
         </div>
 
@@ -189,7 +193,9 @@ export default function AdminPage() {
         </div>
       )}
 
-      {loading ? (
+      {tab === 'empresa' ? (
+        <EmpresaConfig />
+      ) : loading ? (
         <div style={{ padding: '40px', textAlign: 'center' }}><Spinner /></div>
       ) : tab === 'usuarios' ? (
         <div className="tbl-wrap">
@@ -204,6 +210,7 @@ export default function AdminPage() {
                   <td className="td-mono">{u.usuario}</td>
                   <td><span className={`badge ${ROL_BADGE[u.rol] || 'bg-gray'}`}>{NOMBRE_ROL[u.rol] || u.rol}</span></td>
                   <td>
+                    {u.debeCambiarPassword && u.activo && <span className="badge bg-yellow" style={{ marginRight: '4px' }} title="Debe cambiarla al ingresar">Clave temporal</span>}
                     {!u.activo ? <span className="badge bg-gray">Inactivo</span>
                       : bloqueado(u) ? <span className="badge bg-red" title={`Hasta ${fechaHora(u.bloqueadoHasta)}`}>Bloqueado</span>
                       : <span className="badge bg-green">Activo</span>}
@@ -326,7 +333,9 @@ export default function AdminPage() {
             <Field label="Confirmar contraseña">
               <input className="inp" type="password" value={reset.confirmar} onChange={e => setReset(r => ({ ...r, confirmar: e.target.value, error: '' }))} />
             </Field>
-            <p className="muted" style={{ fontSize: '12px', marginTop: '10px' }}>También desbloquea la cuenta si estaba bloqueada por intentos fallidos.</p>
+            <p className="muted" style={{ fontSize: '12px', marginTop: '10px' }}>
+              Es una contraseña temporal: el usuario deberá cambiarla al ingresar. También desbloquea la cuenta.
+            </p>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setReset(null)}>Cancelar</button>
               <button className="btn btn-dark" onClick={guardarReset} disabled={guardando}>Restablecer</button>

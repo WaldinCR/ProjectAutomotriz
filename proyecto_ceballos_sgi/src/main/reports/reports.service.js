@@ -438,7 +438,7 @@ async function generarFactura(ventaId, actor) {
   doc.font(pdf.F.semibold).fontSize(7.5).fillColor(C.navy).text('NOTAS', m, yInicio, { characterSpacing: 0.9 });
   doc.font(pdf.F.regular).fontSize(7.5).fillColor(C.muted).text([
     empresa.preciosIncluyenItbis ? 'Los precios incluyen ITBIS.' : 'El ITBIS se agrega al precio de lista.',
-    venta.ncf ? 'Comprobante fiscal válido según la Norma 06-2018 de la DGII.' : 'Documento sin valor fiscal.',
+    venta.ncf ? 'Comprobante fiscal (NCF) de secuencia autorizada por la DGII.' : 'Documento sin valor fiscal.',
     empresa.piePagina || '',
   ].filter(Boolean).join('\n'), m, yInicio + 13, { width: W - 250, lineGap: 2 });
   doc.y = Math.max(doc.y, yT + 40);

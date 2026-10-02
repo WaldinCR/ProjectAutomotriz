@@ -57,7 +57,7 @@ after(() => prisma.$disconnect());
 // ── Autenticación ────────────────────────────────
 test('login correcto no devuelve el hash y registra el acceso', async () => {
   const u = await auth.login({ usuario: 'cajero', password: 'clave1234' });
-  assert.deepEqual(Object.keys(u).sort(), ['id', 'nombre', 'rol']);
+  assert.deepEqual(Object.keys(u).sort(), ['debeCambiarPassword', 'id', 'nombre', 'rol']);
   const db = await prisma.usuario.findUnique({ where: { id: CAJERO.id } });
   assert.ok(db.ultimoAcceso);
 });

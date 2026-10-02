@@ -5,13 +5,19 @@ import Alert from '../components/Alert';
 import Spinner from '../components/Spinner';
 import Field from '../components/Field';
 import Receipt from '../components/Receipt';
-import { crearOrden, listarOrdenes, cambiarEstado, facturarOrden } from '../services/workshopService';
+import ComprobanteFields, { COMPROBANTE_VACIO, validarComprobante, datosComprobante } from '../components/ComprobanteFields';
+import {
+  crearOrden, listarOrdenes, listarTecnicos, asignarTecnico, agregarItem, quitarItem, cambiarEstado, facturarOrden,
+} from '../services/workshopService';
 import { listarProductos } from '../services/inventoryService';
+import { facturaPdf, generarYAbrir } from '../services/reportsService';
 import { useAuthStore, ROLES } from '../store/authStore';
+import { useConfigStore } from '../store/configStore';
 import { rd, fecha, fechaHora } from '../lib/format';
 
-const VACIO = { vehiculo: '', placa: '', cliente: '', telefono: '', descripcion: '' };
+const VACIO = { vehiculo: '', placa: '', cliente: '', telefono: '', descripcion: '', tecnicoId: '' };
 const LINEA = { tipo: 'SERVICIO', servicio: '', productoId: '', cantidad: '1', precioUnitario: '' };
+const FILTROS = { estado: '', tecnicoId: '', desde: '', hasta: '' };
 
 // Mismas transiciones que el proceso principal (workshop.service.js)
 const ACCIONES = {
@@ -20,18 +26,92 @@ const ACCIONES = {
   COMPLETADA: [{ estado: 'EN_PROCESO', label: 'Reabrir', icon: 'ti-arrow-back-up' }],
 };
 const CANCELABLE = ['PENDIENTE', 'EN_PROCESO'];
+const EDITABLE = ['PENDIENTE', 'EN_PROCESO'];
 
 const BADGE = { FACTURADA: 'bg-green', COMPLETADA: 'bg-purple', EN_PROCESO: 'bg-blue', CANCELADA: 'bg-red', PENDIENTE: 'bg-yellow' };
 const METODOS = ['EFECTIVO', 'TARJETA', 'TRANSFERENCIA'];
 
+// Valida una línea de servicio/repuesto. `pedido` acumula cantidades por repuesto.
+function validarLinea(it, productos, pedido = {}) {
+  const cant = Number(it.cantidad);
+  if (!Number.isInteger(cant) || cant < 1) return 'Cantidad inválida';
+  if (it.tipo === 'REPUESTO') {
+    const p = productos.find(pr => pr.id === Number(it.productoId));
+    if (!p) return 'Seleccione un repuesto';
+    pedido[p.id] = (pedido[p.id] || 0) + cant;
+    if (pedido[p.id] > p.stock) return `Stock insuficiente (disponible: ${p.stock})`;
+    return '';
+  }
+  if (!it.servicio.trim()) return 'Describa el servicio';
+  if (it.precioUnitario === '' || Number(it.precioUnitario) < 0) return 'Indique el precio';
+  return '';
+}
+
+const lineaParaApi = (it) => (it.tipo === 'REPUESTO'
+  ? { productoId: Number(it.productoId), cantidad: Number(it.cantidad), servicio: it.servicio || undefined }
+  : { servicio: it.servicio, cantidad: Number(it.cantidad), precioUnitario: Number(it.precioUnitario) });
+
+// Fila de captura de una línea (usada al crear la orden y al agregar en el detalle)
+function EditorLinea({ item, onChange, productos, mostrarEtiquetas, onQuitar }) {
+  const p = productos.find(pr => pr.id === Number(item.productoId));
+  const precio = item.tipo === 'REPUESTO' ? (p?.precioVenta ?? 0) : (parseFloat(item.precioUnitario) || 0);
+  const set = (campo, valor) => onChange({ ...item, [campo]: valor, ...(campo === 'tipo' && { productoId: '', precioUnitario: '' }) });
+  const et = (t) => (mostrarEtiquetas ? t : null);
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `120px 2fr 74px 116px 110px${onQuitar ? ' 34px' : ''}`, gap: '8px', alignItems: 'end' }}>
+      <Field label={et('Tipo')}>
+        <select className="inp" value={item.tipo} onChange={e => set('tipo', e.target.value)}>
+          <option value="SERVICIO">Servicio</option>
+          <option value="REPUESTO">Repuesto</option>
+        </select>
+      </Field>
+      {item.tipo === 'REPUESTO' ? (
+        <Field label={et('Repuesto del inventario')}>
+          <select className="inp" value={item.productoId} onChange={e => set('productoId', e.target.value)}>
+            <option value="">Seleccione...</option>
+            {productos.map(pr => (
+              <option key={pr.id} value={pr.id} disabled={pr.stock <= 0}>{pr.nombre} — stock {pr.stock}</option>
+            ))}
+          </select>
+        </Field>
+      ) : (
+        <Field label={et('Descripción del servicio')}>
+          <input className="inp" value={item.servicio} placeholder="Ej: Cambio de aceite, mano de obra..." onChange={e => set('servicio', e.target.value)} />
+        </Field>
+      )}
+      <Field label={et('Cant.')}>
+        <input className="inp" type="number" min="1" max={p?.stock} value={item.cantidad} onChange={e => set('cantidad', e.target.value)} />
+      </Field>
+      <Field label={et('Precio (RD$)')}>
+        {item.tipo === 'REPUESTO'
+          ? <input className="inp" value={p ? p.precioVenta.toFixed(2) : ''} disabled title="Precio del inventario" />
+          : <input className="inp" type="number" min="0" step="0.01" value={item.precioUnitario} onChange={e => set('precioUnitario', e.target.value)} />}
+      </Field>
+      <Field label={et('Importe')}>
+        <div className="inp" style={{ background: '#f8fafc' }}>{rd(precio * (parseInt(item.cantidad) || 0))}</div>
+      </Field>
+      {onQuitar && (
+        <button type="button" className="btn btn-ghost btn-sm" title="Quitar línea" onClick={onQuitar} style={{ height: '36px', padding: '0 8px' }}>
+          <i className="ti ti-trash"></i>
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function WorkshopPage() {
-  const { tieneRol } = useAuthStore();
+  const { tieneRol, user } = useAuthStore();
+  const { config } = useConfigStore();
+  const emitirNcf = !!config?.emitirNcf;
   const puedeOperar = tieneRol(ROLES.ADMIN, ROLES.CAJERO);
+  const esTecnico = tieneRol(ROLES.TECNICO);
+  const puedeTrabajar = puedeOperar || esTecnico;
 
   const [ordenes, setOrdenes] = useState([]);
   const [productos, setProductos] = useState([]);
+  const [tecnicos, setTecnicos] = useState([]);
   const [filtro, setFiltro] = useState('');
-  const [filtroEstado, setFiltroEstado] = useState('');
+  const [filtros, setFiltros] = useState(FILTROS);
   const [loading, setLoading] = useState(true);
   const [alerta, setAlerta] = useState(null);
   const [guardando, setGuardando] = useState(false);
@@ -42,19 +122,28 @@ export default function WorkshopPage() {
   const [errors, setErrors] = useState({});
   const [errorModal, setErrorModal] = useState('');
 
-  const [detalle, setDetalle] = useState(null);
-  const [cancelar, setCancelar] = useState(null);   // { orden, motivo, error }
-  const [facturar, setFacturar] = useState(null);   // { orden, metodoPago, error }
+  const [detalle, setDetalle] = useState(null);       // orden abierta en el modal de detalle
+  const [nuevaLinea, setNuevaLinea] = useState(LINEA);
+  const [errorDetalle, setErrorDetalle] = useState('');
+  const [cancelar, setCancelar] = useState(null);     // { orden, motivo, error }
+  const [facturar, setFacturar] = useState(null);     // { orden, metodoPago, comprobante, error }
   const [factura, setFactura] = useState(null);
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { cargar(); }, [filtros]);
 
   async function cargar() {
     setLoading(true);
     try {
-      const [ords, prods] = await Promise.all([listarOrdenes(), listarProductos()]);
+      const [ords, prods, tecs] = await Promise.all([
+        listarOrdenes({ ...filtros, tecnicoId: filtros.tecnicoId ? Number(filtros.tecnicoId) : undefined }),
+        listarProductos(),
+        listarTecnicos(),
+      ]);
       setOrdenes(ords);
       setProductos(prods);
+      setTecnicos(tecs);
+      // Mantiene el detalle abierto sincronizado
+      setDetalle(d => (d ? ords.find(o => o.id === d.id) || d : d));
     } catch (e) {
       setAlerta({ type: 'error', msg: e.message });
     } finally {
@@ -62,20 +151,11 @@ export default function WorkshopPage() {
     }
   }
 
-  const productoDe = (it) => productos.find(p => p.id === Number(it.productoId));
-  const precioDe = (it) => it.tipo === 'REPUESTO' ? (productoDe(it)?.precioVenta ?? 0) : (parseFloat(it.precioUnitario) || 0);
-  const subtotalDe = (it) => precioDe(it) * (parseInt(it.cantidad) || 0);
-  const totalNueva = items.reduce((s, it) => s + subtotalDe(it), 0);
-
-  function updateItem(i, campo, valor) {
-    setItems(prev => prev.map((it, idx) => {
-      if (idx !== i) return it;
-      const u = { ...it, [campo]: valor };
-      if (campo === 'tipo') { u.productoId = ''; u.precioUnitario = ''; }
-      return u;
-    }));
-    setErrors(er => ({ ...er, [`item${i}`]: '' }));
-  }
+  const totalNueva = items.reduce((s, it) => {
+    const p = productos.find(pr => pr.id === Number(it.productoId));
+    const precio = it.tipo === 'REPUESTO' ? (p?.precioVenta ?? 0) : (parseFloat(it.precioUnitario) || 0);
+    return s + precio * (parseInt(it.cantidad) || 0);
+  }, 0);
 
   function cerrarNueva() {
     setModalNueva(false);
@@ -85,34 +165,16 @@ export default function WorkshopPage() {
     setErrorModal('');
   }
 
-  function validar() {
+  async function handleCrear() {
     const err = {};
     if (!form.vehiculo.trim()) err.vehiculo = 'El vehículo es requerido';
     if (!form.cliente.trim()) err.cliente = 'El cliente es requerido';
     if (form.telefono && !/^[0-9+()\-\s]{7,20}$/.test(form.telefono)) err.telefono = 'Teléfono no válido';
-
-    // Cantidad total pedida por repuesto (puede repetirse en varias líneas)
     const pedido = {};
     items.forEach((it, i) => {
-      const cant = Number(it.cantidad);
-      if (!Number.isInteger(cant) || cant < 1) err[`item${i}`] = 'Cantidad inválida';
-      else if (it.tipo === 'REPUESTO') {
-        const p = productoDe(it);
-        if (!p) err[`item${i}`] = 'Seleccione un repuesto';
-        else {
-          pedido[p.id] = (pedido[p.id] || 0) + cant;
-          if (pedido[p.id] > p.stock) err[`item${i}`] = `Stock insuficiente (disponible: ${p.stock})`;
-        }
-      } else {
-        if (!it.servicio.trim()) err[`item${i}`] = 'Describa el servicio';
-        else if (it.precioUnitario === '' || Number(it.precioUnitario) < 0) err[`item${i}`] = 'Indique el precio';
-      }
+      const m = validarLinea(it, productos, pedido);
+      if (m) err[`item${i}`] = m;
     });
-    return err;
-  }
-
-  async function handleCrear() {
-    const err = validar();
     setErrors(err);
     if (Object.keys(err).length) return;
 
@@ -120,9 +182,8 @@ export default function WorkshopPage() {
     try {
       const orden = await crearOrden({
         ...form,
-        items: items.map(it => it.tipo === 'REPUESTO'
-          ? { productoId: Number(it.productoId), cantidad: Number(it.cantidad), servicio: it.servicio || undefined }
-          : { servicio: it.servicio, cantidad: Number(it.cantidad), precioUnitario: Number(it.precioUnitario) }),
+        tecnicoId: form.tecnicoId ? Number(form.tecnicoId) : null,
+        items: items.map(lineaParaApi),
       });
       setAlerta({ type: 'success', msg: `Orden de trabajo #${orden.id} creada` });
       cerrarNueva();
@@ -137,7 +198,7 @@ export default function WorkshopPage() {
   async function handleEstado(orden, estado, motivo) {
     try {
       await cambiarEstado({ ordenId: orden.id, estado, motivo });
-      setAlerta({ type: 'success', msg: `Orden #${orden.id} actualizada a ${estado}` });
+      setAlerta({ type: 'success', msg: `Orden #${orden.id} actualizada a ${estado.replace('_', ' ')}` });
       setCancelar(null);
       cargar();
     } catch (e) {
@@ -146,13 +207,44 @@ export default function WorkshopPage() {
     }
   }
 
+  // Operaciones dentro del detalle: devuelven la orden actualizada
+  async function enDetalle(fn) {
+    setGuardando(true);
+    setErrorDetalle('');
+    try {
+      const orden = await fn();
+      if (orden?.id) setDetalle(orden);
+      cargar();
+    } catch (e) {
+      setErrorDetalle(e.message);
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  function handleAgregarLinea() {
+    const m = validarLinea(nuevaLinea, productos);
+    if (m) return setErrorDetalle(m);
+    return enDetalle(async () => {
+      const orden = await agregarItem({ ordenId: detalle.id, item: lineaParaApi(nuevaLinea) });
+      setNuevaLinea(LINEA);
+      return orden;
+    });
+  }
+
   async function handleFacturar() {
+    const error = validarComprobante(facturar.comprobante, emitirNcf);
+    if (error) return setFacturar(f => ({ ...f, error }));
     setGuardando(true);
     try {
-      const venta = await facturarOrden({ ordenId: facturar.orden.id, metodoPago: facturar.metodoPago });
+      const venta = await facturarOrden({
+        ordenId: facturar.orden.id,
+        metodoPago: facturar.metodoPago,
+        ...datosComprobante(facturar.comprobante, emitirNcf),
+      });
+      setAlerta({ type: 'success', msg: `Orden #${facturar.orden.id} facturada (${venta.numeroFactura}${venta.ncf ? ` · NCF ${venta.ncf}` : ''})` });
       setFacturar(null);
       setFactura(venta);
-      setAlerta({ type: 'success', msg: `Orden #${facturar.orden.id} facturada (${venta.numeroFactura})` });
       cargar();
     } catch (e) {
       setFacturar(f => ({ ...f, error: e.message }));
@@ -163,20 +255,19 @@ export default function WorkshopPage() {
 
   const q = filtro.toLowerCase();
   const ordenesFiltradas = ordenes.filter(o =>
-    (!filtroEstado || o.estado === filtroEstado) && (
-      o.vehiculo.toLowerCase().includes(q) ||
-      o.cliente.toLowerCase().includes(q) ||
-      (o.placa || '').toLowerCase().includes(q) ||
-      String(o.id).includes(filtro)
-    ));
+    o.vehiculo.toLowerCase().includes(q) ||
+    o.cliente.toLowerCase().includes(q) ||
+    (o.placa || '').toLowerCase().includes(q) ||
+    String(o.id).includes(filtro));
 
   const facturadas = ordenes.filter(o => o.estado === 'FACTURADA');
   const abiertas = ordenes.filter(o => ['PENDIENTE', 'EN_PROCESO', 'COMPLETADA'].includes(o.estado)).length;
+  const editable = detalle && EDITABLE.includes(detalle.estado);
 
   return (
     <PageLayout
-      title="Órdenes de trabajo"
-      subtitle="Gestión y seguimiento de servicios del taller"
+      title={esTecnico ? 'Mis órdenes de trabajo' : 'Órdenes de trabajo'}
+      subtitle={esTecnico ? `Órdenes asignadas a ${user?.nombre}` : 'Gestión y seguimiento de servicios del taller'}
       actions={puedeOperar && (
         <button className="btn btn-dark" onClick={() => setModalNueva(true)}>
           <i className="ti ti-plus"></i>Nueva OT
@@ -193,7 +284,7 @@ export default function WorkshopPage() {
         <div className="stat-card">
           <div className="stat-icon-wrap" style={{ background: '#dbeafe' }}><i className="ti ti-clipboard-list" style={{ color: '#1e40af' }}></i></div>
           <div className="stat-val">{ordenes.length}</div>
-          <div className="stat-label">Órdenes totales</div>
+          <div className="stat-label">Órdenes {filtros.estado || filtros.desde || filtros.tecnicoId ? 'filtradas' : 'totales'}</div>
           <div className="stat-bar" style={{ background: '#bfdbfe' }}></div>
         </div>
         <div className="stat-card">
@@ -216,18 +307,32 @@ export default function WorkshopPage() {
         </div>
       </div>
 
-      <div className="search-row">
-        <i className="ti ti-search"></i>
-        <input
-          type="text"
-          placeholder="Buscar por vehículo, placa, cliente o número de OT..."
-          value={filtro}
-          onChange={e => setFiltro(e.target.value)}
-        />
-        <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ border: 'none', background: 'transparent', fontSize: '12px', color: '#64748b' }}>
-          <option value="">Todos los estados</option>
-          {Object.keys(BADGE).map(es => <option key={es} value={es}>{es}</option>)}
-        </select>
+      {/* RF-35: historial por estado, técnico y fecha */}
+      <div className="card" style={{ padding: '12px 14px', marginBottom: '14px', display: 'grid', gridTemplateColumns: `2fr 1fr ${esTecnico ? '' : '1fr '}140px 140px auto`, gap: '10px', alignItems: 'end' }}>
+        <Field label="Buscar">
+          <input className="inp" placeholder="Vehículo, placa, cliente o # de OT" value={filtro} onChange={e => setFiltro(e.target.value)} />
+        </Field>
+        <Field label="Estado">
+          <select className="inp" value={filtros.estado} onChange={e => setFiltros({ ...filtros, estado: e.target.value })}>
+            <option value="">Todos</option>
+            {Object.keys(BADGE).map(es => <option key={es} value={es}>{es.replace('_', ' ')}</option>)}
+          </select>
+        </Field>
+        {!esTecnico && (
+          <Field label="Técnico">
+            <select className="inp" value={filtros.tecnicoId} onChange={e => setFiltros({ ...filtros, tecnicoId: e.target.value })}>
+              <option value="">Todos</option>
+              {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+            </select>
+          </Field>
+        )}
+        <Field label="Desde">
+          <input className="inp" type="date" value={filtros.desde} onChange={e => setFiltros({ ...filtros, desde: e.target.value })} />
+        </Field>
+        <Field label="Hasta">
+          <input className="inp" type="date" value={filtros.hasta} onChange={e => setFiltros({ ...filtros, hasta: e.target.value })} />
+        </Field>
+        <button className="btn btn-ghost" onClick={() => { setFiltros(FILTROS); setFiltro(''); }}>Limpiar</button>
       </div>
 
       <div className="tbl-wrap">
@@ -237,20 +342,14 @@ export default function WorkshopPage() {
           <table>
             <thead>
               <tr>
-                <th>#</th>
-                <th>Vehículo</th>
-                <th>Cliente</th>
-                <th>Estado</th>
-                <th>Total</th>
-                <th>Fecha</th>
-                <th></th>
+                <th>#</th><th>Vehículo</th><th>Cliente</th><th>Técnico</th><th>Estado</th><th>Total</th><th>Fecha</th><th></th>
               </tr>
             </thead>
             <tbody>
               {ordenesFiltradas.length === 0 ? (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
-                    No se encontraron órdenes de trabajo
+                  <td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                    {esTecnico ? 'No tiene órdenes asignadas' : 'No se encontraron órdenes de trabajo'}
                   </td>
                 </tr>
               ) : ordenesFiltradas.map(o => (
@@ -264,18 +363,22 @@ export default function WorkshopPage() {
                     {o.cliente}
                     {o.telefono && <div className="muted" style={{ fontSize: '11px' }}>{o.telefono}</div>}
                   </td>
-                  <td><span className={`badge ${BADGE[o.estado] || 'bg-gray'}`}>{o.estado}</span></td>
+                  <td>{o.tecnico?.nombre || <span className="muted">Sin asignar</span>}</td>
+                  <td><span className={`badge ${BADGE[o.estado] || 'bg-gray'}`}>{o.estado.replace('_', ' ')}</span></td>
                   <td className="td-bold">{rd(o.total)}</td>
                   <td style={{ color: '#64748b' }}>{fecha(o.fechaCreacion)}</td>
                   <td>
                     <div className="row-actions">
-                      {puedeOperar && (ACCIONES[o.estado] || []).map(a => (
+                      {puedeTrabajar && (ACCIONES[o.estado] || []).map(a => (
                         <button key={a.estado} className="btn btn-ghost btn-sm" onClick={() => handleEstado(o, a.estado)}>
                           <i className={`ti ${a.icon}`} style={{ fontSize: '12px' }}></i>{a.label}
                         </button>
                       ))}
                       {puedeOperar && o.estado === 'COMPLETADA' && (
-                        <button className="btn btn-success btn-sm" onClick={() => setFacturar({ orden: o, metodoPago: 'EFECTIVO' })}>
+                        <button
+                          className="btn btn-success btn-sm"
+                          onClick={() => setFacturar({ orden: o, metodoPago: 'EFECTIVO', comprobante: { ...COMPROBANTE_VACIO, clienteNombre: o.cliente } })}
+                        >
                           <i className="ti ti-receipt" style={{ fontSize: '12px' }}></i>Facturar
                         </button>
                       )}
@@ -284,7 +387,7 @@ export default function WorkshopPage() {
                           <i className="ti ti-x" style={{ fontSize: '12px' }}></i>
                         </button>
                       )}
-                      <button className="btn btn-ghost btn-sm" onClick={() => setDetalle(o)} title="Ver detalle">
+                      <button className="btn btn-ghost btn-sm" onClick={() => { setDetalle(o); setErrorDetalle(''); setNuevaLinea(LINEA); }} title="Ver y editar detalle">
                         <i className="ti ti-eye" style={{ fontSize: '12px' }}></i>
                       </button>
                     </div>
@@ -299,7 +402,7 @@ export default function WorkshopPage() {
       {/* Nueva OT */}
       <Modal open={modalNueva} title="Nueva orden de trabajo" onClose={cerrarNueva} size="xl">
         {errorModal && <Alert type="error" message={errorModal} onClose={() => setErrorModal('')} />}
-        <div className="form-grid" style={{ marginBottom: '16px' }}>
+        <div className="form-grid" style={{ marginBottom: '12px' }}>
           <Field label="Vehículo (ej: Toyota Corolla 2018)" error={errors.vehiculo}>
             <input className="inp" value={form.vehiculo} autoFocus onChange={e => { setForm({ ...form, vehiculo: e.target.value }); setErrors({ ...errors, vehiculo: '' }); }} />
           </Field>
@@ -312,67 +415,30 @@ export default function WorkshopPage() {
           <Field label="Teléfono" error={errors.telefono}>
             <input className="inp" value={form.telefono} placeholder="809-000-0000" onChange={e => { setForm({ ...form, telefono: e.target.value }); setErrors({ ...errors, telefono: '' }); }} />
           </Field>
+          <Field label="Técnico asignado">
+            <select className="inp" value={form.tecnicoId} onChange={e => setForm({ ...form, tecnicoId: e.target.value })}>
+              <option value="">Sin asignar</option>
+              {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+            </select>
+          </Field>
+          <Field label="Descripción del problema">
+            <input className="inp" value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })} />
+          </Field>
         </div>
-        <Field label="Descripción del problema" className="mb-4">
-          <textarea className="inp" rows={2} value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })} />
-        </Field>
 
         <div style={{ fontSize: '13px', fontWeight: 600, color: '#334155', margin: '6px 0 10px' }}>Servicios y repuestos</div>
-
-        {items.map((it, i) => {
-          const p = productoDe(it);
-          return (
-            <div key={i} style={{ marginBottom: '10px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '130px 2fr 80px 120px 110px 32px', gap: '8px', alignItems: 'end' }}>
-                <Field label={i === 0 ? 'Tipo' : null}>
-                  <select className="inp" value={it.tipo} onChange={e => updateItem(i, 'tipo', e.target.value)}>
-                    <option value="SERVICIO">Servicio</option>
-                    <option value="REPUESTO">Repuesto</option>
-                  </select>
-                </Field>
-                {it.tipo === 'REPUESTO' ? (
-                  <Field label={i === 0 ? 'Repuesto del inventario' : null}>
-                    <select className="inp" value={it.productoId} onChange={e => updateItem(i, 'productoId', e.target.value)}>
-                      <option value="">Seleccione...</option>
-                      {productos.map(pr => (
-                        <option key={pr.id} value={pr.id} disabled={pr.stock <= 0}>
-                          {pr.nombre} — stock {pr.stock}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                ) : (
-                  <Field label={i === 0 ? 'Descripción del servicio' : null}>
-                    <input className="inp" value={it.servicio} placeholder="Ej: Cambio de aceite, mano de obra..." onChange={e => updateItem(i, 'servicio', e.target.value)} />
-                  </Field>
-                )}
-                <Field label={i === 0 ? 'Cant.' : null}>
-                  <input className="inp" type="number" min="1" max={p?.stock} value={it.cantidad} onChange={e => updateItem(i, 'cantidad', e.target.value)} />
-                </Field>
-                <Field label={i === 0 ? 'Precio (RD$)' : null}>
-                  {it.tipo === 'REPUESTO' ? (
-                    <input className="inp" value={p ? p.precioVenta.toFixed(2) : ''} disabled title="Precio del inventario" />
-                  ) : (
-                    <input className="inp" type="number" min="0" step="0.01" value={it.precioUnitario} onChange={e => updateItem(i, 'precioUnitario', e.target.value)} />
-                  )}
-                </Field>
-                <Field label={i === 0 ? 'Subtotal' : null}>
-                  <div className="inp" style={{ background: '#f8fafc' }}>{rd(subtotalDe(it))}</div>
-                </Field>
-                <button
-                  type="button" className="btn btn-ghost btn-sm" title="Quitar línea"
-                  disabled={items.length === 1}
-                  onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))}
-                  style={{ height: '36px', padding: '0 8px' }}
-                >
-                  <i className="ti ti-trash"></i>
-                </button>
-              </div>
-              {errors[`item${i}`] && <span className="field-err">{errors[`item${i}`]}</span>}
-            </div>
-          );
-        })}
-
+        {items.map((it, i) => (
+          <div key={i} style={{ marginBottom: '10px' }}>
+            <EditorLinea
+              item={it}
+              productos={productos}
+              mostrarEtiquetas={i === 0}
+              onChange={(nuevo) => { setItems(prev => prev.map((x, idx) => (idx === i ? nuevo : x))); setErrors(er => ({ ...er, [`item${i}`]: '' })); }}
+              onQuitar={items.length > 1 ? () => setItems(prev => prev.filter((_, idx) => idx !== i)) : null}
+            />
+            {errors[`item${i}`] && <span className="field-err">{errors[`item${i}`]}</span>}
+          </div>
+        ))}
         <button type="button" className="btn btn-ghost btn-sm" style={{ marginBottom: '6px' }} onClick={() => setItems([...items, LINEA])}>
           <i className="ti ti-plus"></i>Agregar línea
         </button>
@@ -386,21 +452,46 @@ export default function WorkshopPage() {
         </div>
       </Modal>
 
-      {/* Detalle */}
-      <Modal open={!!detalle} title={`Orden #${detalle?.id}`} onClose={() => setDetalle(null)} size="lg">
+      {/* Detalle: asignación de técnico y repuestos usados (RF-30) */}
+      <Modal open={!!detalle} title={`Orden #${detalle?.id}`} onClose={() => setDetalle(null)} size="xl">
         {detalle && (
           <>
+            {errorDetalle && <Alert type="error" message={errorDetalle} onClose={() => setErrorDetalle('')} />}
             <div className="form-grid" style={{ fontSize: '13px', marginBottom: '14px' }}>
               <div><span className="muted">Vehículo:</span> {detalle.vehiculo} {detalle.placa && `(${detalle.placa})`}</div>
-              <div><span className="muted">Estado:</span> <span className={`badge ${BADGE[detalle.estado]}`}>{detalle.estado}</span></div>
+              <div><span className="muted">Estado:</span> <span className={`badge ${BADGE[detalle.estado]}`}>{detalle.estado.replace('_', ' ')}</span></div>
               <div><span className="muted">Cliente:</span> {detalle.cliente} {detalle.telefono && `· ${detalle.telefono}`}</div>
               <div><span className="muted">Creada:</span> {fechaHora(detalle.fechaCreacion)} por {detalle.usuario?.nombre}</div>
-              {detalle.venta && <div><span className="muted">Factura:</span> {detalle.venta.numeroFactura} ({detalle.venta.metodoPago})</div>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="muted">Técnico:</span>
+                {puedeOperar && !['FACTURADA', 'CANCELADA'].includes(detalle.estado) ? (
+                  <select
+                    className="inp" style={{ maxWidth: '220px', padding: '5px 8px' }}
+                    value={detalle.tecnico?.id || ''}
+                    disabled={guardando}
+                    onChange={e => enDetalle(() => asignarTecnico({ ordenId: detalle.id, tecnicoId: e.target.value ? Number(e.target.value) : null }))}
+                  >
+                    <option value="">Sin asignar</option>
+                    {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                  </select>
+                ) : (detalle.tecnico?.nombre || 'Sin asignar')}
+              </div>
+              {detalle.venta && (
+                <div>
+                  <span className="muted">Factura:</span> {detalle.venta.numeroFactura}{detalle.venta.ncf && ` · NCF ${detalle.venta.ncf}`}{' '}
+                  {puedeOperar && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => generarYAbrir(() => facturaPdf(detalle.venta.id)).catch(e => setErrorDetalle(e.message))}>
+                      <i className="ti ti-file-type-pdf"></i>PDF
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             {detalle.descripcion && <p style={{ fontSize: '13px', marginBottom: '14px' }}><span className="muted">Problema:</span> {detalle.descripcion}</p>}
+
             <div className="tbl-wrap">
               <table>
-                <thead><tr><th>Concepto</th><th>Tipo</th><th>Cant.</th><th>Precio</th><th>Subtotal</th></tr></thead>
+                <thead><tr><th>Concepto</th><th>Tipo</th><th>Cant.</th><th>Precio</th><th>Importe</th><th></th></tr></thead>
                 <tbody>
                   {detalle.detalles.map(d => (
                     <tr key={d.id}>
@@ -409,12 +500,39 @@ export default function WorkshopPage() {
                       <td>{d.cantidad}</td>
                       <td>{rd(d.precioUnitario)}</td>
                       <td className="td-bold">{rd(d.subtotal)}</td>
+                      <td>
+                        {puedeTrabajar && editable && detalle.detalles.length > 1 && (
+                          <button
+                            className="btn btn-ghost btn-sm" style={{ color: '#dc2626' }} disabled={guardando}
+                            title={d.productoId ? 'Quitar (el repuesto vuelve al inventario)' : 'Quitar'}
+                            onClick={() => enDetalle(() => quitarItem({ ordenId: detalle.id, detalleId: d.id }))}
+                          >
+                            <i className="ti ti-trash" style={{ fontSize: '12px' }}></i>
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div style={{ textAlign: 'right', fontWeight: 700, fontSize: '15px', marginTop: '10px' }}>Total: {rd(detalle.total)}</div>
+            <div style={{ textAlign: 'right', fontWeight: 700, fontSize: '15px', margin: '10px 0' }}>Total: {rd(detalle.total)}</div>
+
+            {puedeTrabajar && editable && (
+              <div className="card" style={{ padding: '12px', background: '#f8fafc' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: '8px' }}>
+                  Registrar repuesto o servicio utilizado
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'end' }}>
+                  <div style={{ flex: 1 }}>
+                    <EditorLinea item={nuevaLinea} productos={productos} mostrarEtiquetas onChange={(v) => { setNuevaLinea(v); setErrorDetalle(''); }} />
+                  </div>
+                  <button className="btn btn-dark" onClick={handleAgregarLinea} disabled={guardando} style={{ height: '38px' }}>
+                    <i className="ti ti-plus"></i>Agregar
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </Modal>
@@ -432,11 +550,7 @@ export default function WorkshopPage() {
             </Field>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setCancelar(null)}>Volver</button>
-              <button
-                className="btn btn-danger"
-                disabled={!cancelar.motivo.trim()}
-                onClick={() => handleEstado(cancelar.orden, 'CANCELADA', cancelar.motivo.trim())}
-              >
+              <button className="btn btn-danger" disabled={!cancelar.motivo.trim()} onClick={() => handleEstado(cancelar.orden, 'CANCELADA', cancelar.motivo.trim())}>
                 Cancelar orden
               </button>
             </div>
@@ -450,8 +564,11 @@ export default function WorkshopPage() {
           <>
             {facturar.error && <Alert type="error" message={facturar.error} />}
             <div style={{ background: '#f8fafc', borderRadius: '12px', padding: '16px', textAlign: 'center', marginBottom: '14px', border: '1px solid #e2e8f0' }}>
-              <p style={{ fontSize: '12px', color: '#64748b' }}>Total a cobrar</p>
+              <p style={{ fontSize: '12px', color: '#64748b' }}>Total de la orden</p>
               <p style={{ fontSize: '28px', fontWeight: 700, color: '#1e3a5f' }}>{rd(facturar.orden.total)}</p>
+              <p style={{ fontSize: '11px', color: '#64748b' }}>
+                {config?.preciosIncluyenItbis === false ? `Se agregará ITBIS (${Math.round(config.tasaItbis * 100)}%)` : 'ITBIS incluido en los precios'}
+              </p>
             </div>
             <label className="lbl">Método de pago</label>
             {METODOS.map(m => (
@@ -459,6 +576,13 @@ export default function WorkshopPage() {
                 {m}
               </button>
             ))}
+            <div style={{ marginTop: '10px' }}>
+              <ComprobanteFields
+                valor={facturar.comprobante}
+                emitirNcf={emitirNcf}
+                onChange={(c) => setFacturar(f => ({ ...f, comprobante: c, error: '' }))}
+              />
+            </div>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setFacturar(null)}>Cancelar</button>
               <button className="btn btn-dark" onClick={handleFacturar} disabled={guardando}>{guardando ? 'Procesando...' : 'Confirmar factura'}</button>
@@ -467,7 +591,7 @@ export default function WorkshopPage() {
         )}
       </Modal>
 
-      <Receipt venta={factura} onClose={() => setFactura(null)} />
+      <Receipt venta={factura} onClose={() => setFactura(null)} titulo="Orden facturada" />
     </PageLayout>
   );
 }

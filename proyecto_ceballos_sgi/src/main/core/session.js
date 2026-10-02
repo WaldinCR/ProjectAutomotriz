@@ -10,7 +10,7 @@ const sesiones = new Map(); // senderId -> { usuario, ultimaActividad }
 
 function iniciar(senderId, usuario) {
   sesiones.set(senderId, {
-    usuario: { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol },
+    usuario: { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, debeCambiarPassword: !!usuario.debeCambiarPassword },
     ultimaActividad: Date.now(),
   });
 }
@@ -20,7 +20,7 @@ function cerrar(senderId) {
 }
 
 // Devuelve el usuario autenticado y renueva la actividad, o lanza error
-function requerir(senderId, rolesPermitidos) {
+function requerir(senderId, rolesPermitidos, opciones = {}) {
   const sesion = sesiones.get(senderId);
   if (!sesion) throw new AppError('Debe iniciar sesión para continuar', 'SESION_EXPIRADA');
 
@@ -28,11 +28,20 @@ function requerir(senderId, rolesPermitidos) {
     sesiones.delete(senderId);
     throw new AppError('La sesión expiró por inactividad. Inicie sesión nuevamente.', 'SESION_EXPIRADA');
   }
+  // Con contraseña temporal solo se permite cambiarla (o consultar la sesión)
+  if (sesion.usuario.debeCambiarPassword && !opciones.permitirTemporal) {
+    throw new AppError('Debe cambiar su contraseña temporal antes de continuar', 'CAMBIAR_PASSWORD');
+  }
   if (rolesPermitidos && !rolesPermitidos.includes(sesion.usuario.rol)) {
     throw new AppError('No tiene permisos para realizar esta acción', 'PROHIBIDO');
   }
   sesion.ultimaActividad = Date.now();
   return sesion.usuario;
+}
+
+function actualizar(senderId, usuario) {
+  const sesion = sesiones.get(senderId);
+  if (sesion) sesion.usuario = { ...sesion.usuario, ...usuario };
 }
 
 // Cierra las sesiones de un usuario (p. ej. al desactivarlo o cambiar su rol)
@@ -42,4 +51,4 @@ function cerrarDeUsuario(usuarioId) {
   }
 }
 
-module.exports = { iniciar, cerrar, requerir, cerrarDeUsuario, INACTIVIDAD_MS };
+module.exports = { iniciar, cerrar, requerir, actualizar, cerrarDeUsuario, INACTIVIDAD_MS };
