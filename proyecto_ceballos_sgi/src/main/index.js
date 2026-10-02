@@ -7,6 +7,8 @@ const path = require('path');
 // En la app instalada la carpeta del programa es de solo lectura:
 // la base de datos y el .env viven en %APPDATA%/SGI Automotriz
 if (app.isPackaged) {
+  // Electron crea userData de forma diferida; SQLite necesita la carpeta para crear la base
+  require('fs').mkdirSync(app.getPath('userData'), { recursive: true });
   require('./core/env').cargarEnv(path.join(app.getPath('userData'), '.env'));
   if (!process.env.DATABASE_URL) {
     process.env.DATABASE_URL = `file:${path.join(app.getPath('userData'), 'sgi_database.db').split(path.sep).join('/')}`;
@@ -73,6 +75,7 @@ app.whenReady().then(async () => {
       },
     });
   } catch (error) {
+    console.error('[Migraciones] Error:', error);
     dialog.showErrorBox('No se pudo actualizar la base de datos',
       `${error.message}
 

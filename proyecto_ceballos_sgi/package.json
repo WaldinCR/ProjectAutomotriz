@@ -17,11 +17,9 @@
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",
-    "@tabler/icons-webfont": "^3.48.0",
     "bcrypt": "^5.1.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
-    "lucide-react": "^1.49.0",
     "node-schedule": "^2.1.1",
     "node-thermal-printer": "^4.3.4",
     "pdfkit": "^0.14.0",
@@ -29,11 +27,13 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@tabler/icons-webfont": "^3.48.0",
     "@vitejs/plugin-react": "^4.0.0",
     "autoprefixer": "^10.5.0",
     "concurrently": "^8.0.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
+    "lucide-react": "^1.49.0",
     "prisma": "^5.0.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
@@ -58,6 +58,13 @@
       "dist/**/*",
       "prisma/schema.prisma",
       "prisma/migrations/**/*",
+      {
+        "from": "node_modules/.prisma",
+        "to": "node_modules/.prisma",
+        "filter": [
+          "**/*"
+        ]
+      },
       "!**/*.db"
     ],
     "asarUnpack": [
